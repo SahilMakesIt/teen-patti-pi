@@ -1,0 +1,214 @@
+import React, { useState } from 'react';
+import { PlayCircle, Wallet, X } from 'lucide-react';
+import { HAND_CATEGORIES, LOW_CHIPS_THRESHOLD } from '../engine/teenPattiEngine';
+
+const PI_PACKS = [
+  { quantity: 1, label: '1x', chips: 10000, piLabel: '0.25 Pi' },
+  { quantity: 2, label: '2x', chips: 20000, piLabel: '0.50 Pi' },
+  { quantity: 5, label: '5x', chips: 50000, piLabel: '1.25 Pi' }
+];
+
+export function RefillChipsModal({
+  playerName,
+  currentChips,
+  isAdPreviewRunning,
+  adPreviewSecondsLeft,
+  isPiPaymentBusy,
+  statusMessage,
+  onWatchVideoAd,
+  onBuyPiChipsPack,
+  onDismiss
+}) {
+  const [selectedQty, setSelectedQty] = useState(1);
+  const selectedPack = PI_PACKS.find((p) => p.quantity === selectedQty) || PI_PACKS[0];
+  const busy = isAdPreviewRunning || isPiPaymentBusy;
+
+  return (
+    <div className="modal-backdrop" onClick={() => !busy && onDismiss()}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <h2 className="modal-title">Chip Store</h2>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              {playerName} • {currentChips.toLocaleString('en-US')} Chips
+            </div>
+          </div>
+          <button className="icon-btn" onClick={onDismiss} disabled={busy} aria-label="Close Chip Store">
+            <X size={20} />
+          </button>
+        </div>
+
+        {currentChips < LOW_CHIPS_THRESHOLD && (
+          <div
+            style={{
+              background: 'rgba(245, 158, 11, 0.14)',
+              color: 'var(--amber)',
+              borderRadius: 10,
+              padding: '8px 10px',
+              fontSize: 12
+            }}
+          >
+            Balance below 500 — grab a chip pack or watch a short ad to keep playing.
+          </div>
+        )}
+
+        {statusMessage && (
+          <div
+            style={{
+              background: 'var(--emerald-soft)',
+              color: 'var(--emerald)',
+              borderRadius: 10,
+              padding: '8px 10px',
+              fontSize: 12
+            }}
+          >
+            {statusMessage}
+          </div>
+        )}
+
+        <div className="store-box pi-border">
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
+            <span style={{ color: 'var(--pi-purple)' }}>Pi Wallet Chip Packs</span>
+            <span style={{ color: 'var(--gold)' }}>Unlimited Purchases</span>
+          </div>
+
+          <div className="pack-grid">
+            {PI_PACKS.map((pack) => {
+              const active = pack.quantity === selectedPack.quantity;
+              return (
+                <button
+                  key={pack.label}
+                  type="button"
+                  disabled={busy}
+                  className={`pack-option ${active ? 'selected' : ''}`}
+                  onClick={() => setSelectedQty(pack.quantity)}
+                >
+                  <div style={{ fontWeight: 800, color: active ? 'var(--gold)' : 'var(--text-primary)' }}>
+                    {pack.label}
+                  </div>
+                  <div style={{ fontSize: 11.5, fontWeight: 700 }}>{pack.chips.toLocaleString('en-US')}</div>
+                  <div style={{ fontSize: 10.5, color: 'var(--pi-purple)' }}>{pack.piLabel}</div>
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            disabled={busy}
+            className="dock-btn pi"
+            onClick={() => onBuyPiChipsPack(selectedPack.quantity)}
+          >
+            <Wallet size={17} />
+            {isPiPaymentBusy
+              ? 'Processing Pi Payment...'
+              : `Buy ${selectedPack.chips.toLocaleString('en-US')} Play Chips — ${selectedPack.piLabel}`}
+          </button>
+        </div>
+
+        <div className="store-box emerald-border">
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--emerald)' }}>Free Ad Reward</div>
+          <button type="button" disabled={busy} className="dock-btn call" onClick={onWatchVideoAd}>
+            <PlayCircle size={18} />
+            {isAdPreviewRunning
+              ? `Ad Preview (${adPreviewSecondsLeft}s)...`
+              : 'Watch Ad Video (+2,500 Free Chips)'}
+          </button>
+        </div>
+
+        <div className="notice-box">
+          One-way entertainment purchase only. Play Chips have zero monetary value and cannot be redeemed or exchanged for Pi.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function RulesModal({ onDismiss }) {
+  const rankings = Object.values(HAND_CATEGORIES).sort((a, b) => b.rankOrder - a.rankOrder);
+  return (
+    <div className="modal-backdrop" onClick={onDismiss}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 className="modal-title">Rules & Hand Rankings</h2>
+          <button className="icon-btn" onClick={onDismiss} aria-label="Close Rules">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+          Each player puts in the Boot stake and receives 3 face-down cards. Play Blind (1x stake) or tap See Cards to become Seen (2x stake). Tap Show when 2 players remain to reveal hands.
+        </div>
+
+        {rankings.map((cat) => (
+          <div className="rule-row" key={cat.displayName}>
+            <strong style={{ color: 'var(--gold)' }}>{cat.displayName}</strong>
+            <span style={{ color: 'var(--text-secondary)', textAlign: 'right' }}>{cat.shortSummary}</span>
+          </div>
+        ))}
+
+        <div className="notice-box">
+          Play Chips have zero monetary value. Entertainment only.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function PiProfileModal({
+  currentName,
+  piStatusMessage,
+  isConnecting,
+  onConnectWithPi,
+  onSaveNickname,
+  onDismiss
+}) {
+  const [nickname, setNickname] = useState(currentName || '');
+  return (
+    <div className="modal-backdrop" onClick={onDismiss}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2 className="modal-title">Pioneer Profile & Pi Wallet</h2>
+          <button className="icon-btn" onClick={onDismiss} aria-label="Close Profile">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="notice-box" style={{ color: 'var(--emerald)' }}>
+          {piStatusMessage}
+        </div>
+
+        <button type="button" className="dock-btn pi" disabled={isConnecting} onClick={onConnectWithPi}>
+          <Wallet size={17} />
+          {isConnecting ? 'Connecting Pi Wallet...' : 'Connect Pi Wallet'}
+        </button>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
+            Display Nickname
+          </label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              className="code-input"
+              style={{ letterSpacing: 'normal' }}
+              value={nickname}
+              maxLength={16}
+              onChange={(e) => setNickname(e.target.value)}
+            />
+            <button
+              type="button"
+              className="join-btn"
+              onClick={() => {
+                onSaveNickname(nickname);
+                onDismiss();
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

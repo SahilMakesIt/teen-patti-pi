@@ -103,7 +103,6 @@ export default function TableVoiceControls({
     return stream;
   }
 
-  // Toggle local mic track enabled/disabled when speaking or hands-free
   useEffect(() => {
     let cancelled = false;
 
@@ -116,7 +115,6 @@ export default function TableVoiceControls({
           stream.getAudioTracks().forEach((t) => {
             t.enabled = true;
           });
-          // Attach local track to any already-open peer connections
           Object.values(peersRef.current).forEach((pc) => {
             const senders = pc.getSenders();
             stream.getAudioTracks().forEach((track) => {
@@ -148,7 +146,6 @@ export default function TableVoiceControls({
     };
   }, [isTransmitting]);
 
-  // WebRTC Mesh + Firebase RTDB Signaling for Online Tables
   useEffect(() => {
     if (!roomId || roomId === 'local' || !userId) {
       setVoiceStatus('Local');
@@ -161,6 +158,7 @@ export default function TableVoiceControls({
     const myPresenceRef = ref(db, `voiceRooms/${cleanRoom}/peers/${cleanUser}`);
     const peersListRef = ref(db, `voiceRooms/${cleanRoom}/peers`);
 
+    setVoiceStatus('Connecting');
     set(myPresenceRef, { joinedAt: Date.now() }).catch(() => {});
     onDisconnect(myPresenceRef).remove().catch(() => {});
 
@@ -199,8 +197,6 @@ export default function TableVoiceControls({
 
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peersRef.current[remoteId] = pc;
-
-      // Ensure bidirectional audio transceiver even before local mic is unmuted
       pc.addTransceiver('audio', { direction: 'sendrecv' });
 
       if (streamRef.current) {
@@ -221,8 +217,8 @@ export default function TableVoiceControls({
         const state = pc.iceConnectionState;
         if (state === 'connected' || state === 'completed') {
           setVoiceStatus('Live');
-        } else if (state === 'failed' || state === 'disconnected') {
-          setVoiceStatus('Reconnecting');
+        } else if (state === 'checking') {
+          setVoiceStatus('Connecting');
         }
       };
 

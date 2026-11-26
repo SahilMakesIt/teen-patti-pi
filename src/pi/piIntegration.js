@@ -156,7 +156,6 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
   }
   tickCb(0);
   return { granted: true, chips: 2500, adId: `preview_${Date.now()}` };
-}
 
 }
 

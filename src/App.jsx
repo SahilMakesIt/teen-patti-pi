@@ -1,3 +1,4 @@
+import LegalPages from "./components/LegalPages";
 import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -121,7 +122,13 @@ function mapRoomAndSeatsToTable(room, seats, fallbackMode) {
   };
 }
 
-export default function App() {
+export default function App(const path = window.location.pathname.toLowerCase();
+if (path === "/privacy") {
+  return <LegalPages mode="privacy" onBack={() => (window.location.href = "/")} />;
+}
+if (path === "/terms") {
+  return <LegalPages mode="terms" onBack={() => (window.location.href = "/")} />;
+}) {
   const guest = useRef(getOrCreateGuestIdentity()).current;
 
   const [screen, setScreen] = useState('LOBBY');

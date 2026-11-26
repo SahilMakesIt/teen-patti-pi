@@ -119,24 +119,42 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
   const tickCb = typeof onPreviewTick === 'function' ? onPreviewTick : () => {};
 
   if (isPiAdsSupported()) {
-    let showResult;
-    if (typeof window.Pi.Ads.isAdReady === 'function') {
-      const readiness = await window.Pi.Ads.isAdReady('rewarded');
-      if (!readiness?.ready && typeof window.Pi.Ads.requestAd === 'function') {
-        await window.Pi.Ads.requestAd('rewarded');
+    let secs = 3;
+    tickCb(secs);
+    const timer = setInterval(() => {
+      secs = Math.max(0, secs - 1);
+      tickCb(secs);
+    }, 1000);
+
+    try {
+      let showResult;
+      if (typeof window.Pi.Ads.isAdReady === 'function') {
+        const readiness = await window.Pi.Ads.isAdReady('rewarded');
+        if (!readiness?.ready && typeof window.Pi.Ads.requestAd === 'function') {
+          await window.Pi.Ads.requestAd('rewarded');
+        }
       }
+      showResult = await window.Pi.Ads.showAd('rewarded');
+      if (showResult?.result === 'AD REWARDED' && showResult?.adId) {
+        return verifyAndGrantAdReward(showResult.adId);
+      }
+      return {
+        granted: false,
+        adId: showResult?.adId || null,
+        reason: 'Ad closed before reward completion.'
+      };
+    } finally {
+      clearInterval(timer);
     }
-    showResult = await window.Pi.Ads.showAd('rewarded');
-    if (showResult?.result === 'AD_REWARDED' && showResult?.adId) {
-      return verifyAndGrantAdReward(showResult.adId);
-    }
-    return {
-      granted: false,
-      adId: showResult?.adId || null,
-      mediator_ack_status: showResult?.result || 'not_rewarded',
-      chips: 0
-    };
   }
+
+  for (let secs = 3; secs >= 1; secs -= 1) {
+    tickCb(secs);
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  tickCb(0);
+  return { granted: true, chips: 2500, adId: `preview_${Date.now()}` };
+}
 
   return new Promise((resolve) => {
     let remaining = 3;

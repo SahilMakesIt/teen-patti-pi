@@ -15,7 +15,6 @@ export function RefillChipsModal({
   currentChips,
   isAdPreviewRunning,
   adPreviewSecondsLeft,
-  adCooldown,
   isPiPaymentBusy,
   isGiftBusy = false,
   statusMessage,
@@ -31,11 +30,10 @@ export function RefillChipsModal({
   const selectedPack = PI_PACKS.find((p) => p.quantity === selectedQty) || PI_PACKS[0];
   const busy = isAdPreviewRunning || isPiPaymentBusy || isGiftBusy;
 
-  const adBlockedByCooldown = adCooldown && !adCooldown.canWatch;
   const adButtonLabel = isAdPreviewRunning
-    ? `Ad Preview (${adPreviewSecondsLeft}s)...`
-    : adCooldown?.buttonText || 'Watch Ad Video (+2,500 Free Chips)';
-
+    ? 'Loading Ad...'
+    : 'Watch Ad Video (+2,500 Free Chips)';
+  
   const parsedGiftAmount = Math.max(0, Math.floor(Number(giftAmount) || 0));
   const canSendGift =
     Boolean(onGiftChips) &&
@@ -136,15 +134,12 @@ export function RefillChipsModal({
         <div className="store-box emerald-border">
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
             <span style={{ color: 'var(--emerald)' }}>Free Ad Reward (+2,500 Chips)</span>
-            <span style={{ color: 'var(--text-secondary)' }}>
-              {adCooldown ? `${adCooldown.adsRemaining}/7 left today • 5m cooldown` : 'Max 7 / 24h'}
-            </span>
+            <span style={{ color: 'var(--text-secondary)' }}>Unlimited</span>
           </div>
           <button
             type="button"
-            disabled={busy || adBlockedByCooldown}
+            disabled={busy}
             className="dock-btn call"
-            style={adBlockedByCooldown ? { opacity: 0.65, cursor: 'not-allowed' } : undefined}
             onClick={onWatchVideoAd}
           >
             <PlayCircle size={18} />

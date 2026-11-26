@@ -3,12 +3,13 @@ import {
   ArrowLeft,
   Check,
   Eye,
+  EyeOff,
   HelpCircle,
   PlusCircle,
   Share2,
   Trophy,
   Volume2,
-  VolumeX
+  VolumeX,
 } from 'lucide-react';
 import {
   GAME_MODES,
@@ -19,8 +20,9 @@ import {
   canSeeCards,
   getCurrentPlayer,
   minStakeFor,
-  raiseStakeFor
+  raiseStakeFor,
 } from '../engine/teenPattiEngine';
+import TableVoiceControls from './TableVoiceControls';
 
 function getOpponentPositionClass(totalOpponents, idx) {
   if (totalOpponents === 1) return 'seat-top-center';
@@ -40,26 +42,37 @@ function SeatBadge({
   seat,
   positionClass,
   isHero,
+  heroHideBalance,
+  isSpeaking,
   isTurn,
   isDealer,
   isWinner,
   showFaceUp,
   dealtStage,
-  turnTimerProgress
+  turnTimerProgress,
 }) {
   const isPacked = seat.status === PLAYER_STATUS.PACKED;
+  const isMasked = !isHero && Boolean(seat.hideBalance);
+  const secondsLeft = Math.max(0, Math.ceil((turnTimerProgress || 0) * 30));
+
   return (
     <div
       className={`seat-badge ${positionClass} ${isTurn ? 'turn' : ''} ${isWinner ? 'winner' : ''} ${
         isPacked ? 'packed' : ''
       }`}
+      style={isSpeaking ? { boxShadow: '0 0 0 2px #22c55e' } : undefined}
     >
       <div className="seat-name-row">
-        <span className="seat-name">{seat.name}</span>
+        <span className="seat-name">
+          {seat.name} {isSpeaking ? '🎙️' : ''}
+        </span>
         {isDealer && <span className="dealer-chip">D</span>}
       </div>
-      <div className="seat-chips">{seat.chips.toLocaleString('en-US')}</div>
-
+      <div className="seat-chips">
+        {isMasked
+          ? 'Hidden'
+          : `${seat.chips.toLocaleString('en-US')}${isHero && heroHideBalance ? ' (Hidden)' : ''}`}
+      </div>
       {seat.cards && seat.cards.length > 0 && (
         <div className="seat-cards-row">
           {seat.cards.slice(0, dealtStage).map((card, i) =>
@@ -76,16 +89,19 @@ function SeatBadge({
           )}
         </div>
       )}
-
       {seat.lastActionLabel && <span className="seat-action-tag">{seat.lastActionLabel}</span>}
-
       {isTurn && (
-        <div className="turn-progress-track">
-          <div
-            className="turn-progress-fill"
-            style={{ width: `${Math.max(0, Math.min(100, turnTimerProgress * 100))}%` }}
-          />
-        </div>
+        <>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: secondsLeft <= 7 ? '#f87171' : '#f2c94c', marginTop: 2 }}>
+            {secondsLeft}s
+          </div>
+          <div className="turn-progress-track">
+            <div
+              className="turn-progress-fill"
+              style={{ width: `${Math.max(0, Math.min(100, turnTimerProgress * 100))}%` }}
+            />
+          </div>
+        </>
       )}
     </div>
   );
@@ -95,6 +111,8 @@ export function TableView({
   tableState,
   currentUserId,
   soundEnabled,
+  hideBalance = false,
+  onToggleHideBalance,
   dealtStage,
   turnTimerProgress,
   onLeaveTable,
@@ -105,18 +123,17 @@ export function TableView({
   onBet,
   onPack,
   onShow,
-  onDealNextHand
+  onDealNextHand,
 }) {
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isVoiceMutedByListener, setIsVoiceMutedByListener] = useState(false);
+  const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
 
   const players = tableState.players || [];
   const currentTurnPlayer = getCurrentPlayer(tableState);
   const isOnline = tableState.mode?.isOnline;
   const isHost = tableState.hostId === currentUserId;
-
-  const perspectiveIdx = isOnline
-    ? Math.max(0, players.findIndex((p) => p.id === currentUserId))
-    : 0;
+  const perspectiveIdx = isOnline ? Math.max(0, players.findIndex((p) => p.id === currentUserId)) : 0;
   const orderedSeats = players.map((_, offset) => players[(perspectiveIdx + offset) % players.length]);
   const heroSeat = orderedSeats[0] || null;
   const opponents = orderedSeats.slice(1);
@@ -128,11 +145,9 @@ export function TableView({
     centerPill = `CODE: ${tableState.roomCode} • ${players.length}/${tableState.maxPlayers}`;
   }
 
-  const isShowdownReveal =
-    tableState.phase === TABLE_PHASE.SHOWDOWN && tableState.handResult?.wonByShow;
+  const isShowdownReveal = tableState.phase === TABLE_PHASE.SHOWDOWN && tableState.handResult?.wonByShow;
   const winnerIds = new Set(tableState.handResult?.winnerIds || []);
   const winnerNames = new Set(tableState.handResult?.winnerNames || []);
-
   const lowChipHuman = players.find(
     (p) => (!isOnline || p.id === currentUserId) && !p.isBot && p.chips < LOW_CHIPS_THRESHOLD
   );
@@ -150,12 +165,11 @@ export function TableView({
     } catch (_err) {
       setCopiedCode(true);
     }
-
     if (navigator.share) {
       try {
         await navigator.share({
           title: 'Join my Teen Patti Table',
-          text: `Join my Teen Patti table! Enter 6-digit invite code: ${code}`
+          text: `Join my Teen Patti table! Enter 6-digit invite code: ${code}`,
         });
       } catch (_err) {
         // Ignore user share cancellation
@@ -169,10 +183,19 @@ export function TableView({
         <button className="icon-btn" onClick={onLeaveTable} aria-label="Back to Lobby">
           <ArrowLeft size={21} />
         </button>
-
         <div className="table-status-pill">{centerPill}</div>
-
         <div className="icon-actions">
+          {onToggleHideBalance && (
+            <button
+              className="icon-btn"
+              style={{ color: hideBalance ? 'var(--gold)' : 'var(--text-secondary)' }}
+              onClick={onToggleHideBalance}
+              title={hideBalance ? 'Balance Hidden from Table (Click to Show)' : 'Hide Balance from Table'}
+              aria-label="Toggle Balance Visibility"
+            >
+              {hideBalance ? <EyeOff size={19} /> : <Eye size={19} />}
+            </button>
+          )}
           <button
             className="icon-btn"
             style={{ color: 'var(--gold)' }}
@@ -195,9 +218,16 @@ export function TableView({
         </div>
       </div>
 
+      <TableVoiceControls
+        roomId={tableState.roomCode || 'local'}
+        userId={currentUserId}
+        isVoiceMutedByListener={isVoiceMutedByListener}
+        onToggleListenerMute={() => setIsVoiceMutedByListener((prev) => !prev)}
+        onSpeakingChange={setIsLocalSpeaking}
+      />
+
       <div className="felt-arena">
         <div className="felt-oval" />
-
         <div className="pot-center">
           <div className="pot-badge">
             <div className="pot-label">TOTAL POT • HAND #{tableState.handNumber}</div>
@@ -215,6 +245,8 @@ export function TableView({
             seat={seat}
             positionClass={getOpponentPositionClass(opponents.length, idx)}
             isHero={false}
+            heroHideBalance={false}
+            isSpeaking={false}
             isTurn={currentTurnPlayer?.id === seat.id && tableState.phase === TABLE_PHASE.BETTING}
             isDealer={tableState.dealerIndex === seat.seatIndex}
             isWinner={winnerIds.has(seat.id) || winnerNames.has(seat.name)}
@@ -229,6 +261,8 @@ export function TableView({
             seat={heroSeat}
             positionClass="seat-hero"
             isHero
+            heroHideBalance={hideBalance}
+            isSpeaking={isLocalSpeaking}
             isTurn={currentTurnPlayer?.id === heroSeat.id && tableState.phase === TABLE_PHASE.BETTING}
             isDealer={tableState.dealerIndex === heroSeat.seatIndex}
             isWinner={winnerIds.has(heroSeat.id) || winnerNames.has(heroSeat.name)}
@@ -248,8 +282,7 @@ export function TableView({
             className="dock-btn call"
             onClick={() => onOpenRefillDialog(lowChipHuman.id)}
           >
-            <PlusCircle size={17} />
-            {lowChipHuman.name}: + Get Chips
+            <PlusCircle size={17} /> {lowChipHuman.name}: + Get Chips
           </button>
         ) : tableState.phase === TABLE_PHASE.SHOWDOWN && activeLocalHuman ? (
           <button
@@ -257,8 +290,7 @@ export function TableView({
             className="dock-btn outline"
             onClick={() => onOpenRefillDialog(activeLocalHuman.id)}
           >
-            <PlusCircle size={16} />
-            + Get Chips
+            <PlusCircle size={16} /> + Get Chips
           </button>
         ) : null}
 
@@ -267,24 +299,26 @@ export function TableView({
             <div style={{ textAlign: 'center', fontWeight: 700, fontSize: 13.5, color: 'var(--gold)' }}>
               Waiting for real players: {players.length}/{tableState.maxPlayers} joined...
             </div>
-
             {!tableState.isPublicRoom && tableState.roomCode ? (
               <div className="invite-code-box">
                 <div>
-                  <div style={{ fontSize: 10.5, color: copiedCode ? 'var(--emerald)' : 'var(--text-secondary)' }}>
+                  <div
+                    style={{
+                      fontSize: 10.5,
+                      color: copiedCode ? 'var(--emerald)' : 'var(--text-secondary)',
+                    }}
+                  >
                     {copiedCode ? 'Invite Code Copied!' : '6-Digit Invite Code'}
                   </div>
                   <div className="invite-code-digits">{tableState.roomCode}</div>
                 </div>
-
                 <button
                   type="button"
                   className="join-btn"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                   onClick={handleCopyShareCode}
                 >
-                  {copiedCode ? <Check size={16} /> : <Share2 size={16} />}
-                  Copy / Share Invite Code
+                  {copiedCode ? <Check size={16} /> : <Share2 size={16} />} Copy / Share Invite Code
                 </button>
               </div>
             ) : (
@@ -328,7 +362,6 @@ export function TableView({
                 </div>
               </div>
             )}
-
             <div className="dock-row">
               <button type="button" className="dock-btn outline" style={{ flex: 1 }} onClick={onLeaveTable}>
                 Lobby
@@ -354,7 +387,15 @@ export function TableView({
             {!currentTurnPlayer ||
             currentTurnPlayer.isBot ||
             (isOnline && currentTurnPlayer.id !== currentUserId) ? (
-              <div style={{ textAlign: 'center', padding: '10px 0', color: 'var(--gold)', fontWeight: 700, fontSize: 13 }}>
+              <div
+                style={{
+                  textAlign: 'center',
+                  padding: '10px 0',
+                  color: 'var(--gold)',
+                  fontWeight: 700,
+                  fontSize: 13,
+                }}
+              >
                 {currentTurnPlayer?.isBot
                   ? `${currentTurnPlayer.name} is thinking...`
                   : `Waiting for ${currentTurnPlayer?.name || 'player'}'s move...`}
@@ -387,13 +428,11 @@ export function TableView({
                         2x {raiseCost.toLocaleString('en-US')}
                       </button>
                     </div>
-
                     {(allowSee || allowShow) && (
                       <div className="dock-row">
                         {allowSee && (
                           <button type="button" className="dock-btn outline" onClick={onSeeCards}>
-                            <Eye size={16} />
-                            See Cards
+                            <Eye size={16} /> See Cards
                           </button>
                         )}
                         {allowShow && (

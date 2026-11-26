@@ -80,7 +80,8 @@ function mapRoomAndSeatsToTable(room, seats, fallbackMode) {
     status: doc.status || PLAYER_STATUS.ACTIVE_BLIND,
     totalBetInHand: Number(doc.totalBetInHand || 0),
     lastActionLabel: doc.lastActionLabel || null,
-    isPiVerified: Boolean(doc.piVerified)
+    isPiVerified: Boolean(doc.piVerified),
+   hideBalance: Boolean(doc.hideBalance),
   }));
 
   let phase = TABLE_PHASE.BETTING;
@@ -143,9 +144,9 @@ if (path === "/terms") {
     chipsBalance: STARTING_CHIPS,
     handsPlayed: 0,
     handsWon: 0,
-    soundEnabled: true
-    hideBalance: false,
-  adHistory: [],
+    soundEnabled: true,
+   hideBalance: false,
+   adHistory: [],
   });
   const [piStatusMessage, setPiStatusMessage] = useState(guest.environmentLabel);
   const [isPiConnecting, setIsPiConnecting] = useState(false);
@@ -224,9 +225,7 @@ if (path === "/terms") {
         },
         () => {}
       );
-        },
-        () => {}
-      );
+     
 
       // Background auto-connect Pi Wallet inside Pi Browser
       const piResult = await authenticateWithPi();

@@ -139,10 +139,12 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
         return verifyAndGrantAdReward(showResult.adId);
       }
       return {
-        granted: false,
-        adId: showResult?.adId || null,
-        reason: 'Ad closed before reward completion.'
-      };
+  granted: false,
+  adId: showResult?.adId || null,
+  reason: showResult?.result
+    ? `Ad not rewarded (${showResult.result}).`
+    : 'Ad closed before reward completion.'
+};
     } finally {
       clearInterval(timer);
     }
@@ -156,23 +158,6 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
   return { granted: true, chips: 2500, adId: `preview_${Date.now()}` };
 }
 
-  return new Promise((resolve) => {
-    let remaining = 3;
-    tickCb(remaining);
-    const timer = setInterval(() => {
-      remaining -= 1;
-      tickCb(Math.max(0, remaining));
-      if (remaining <= 0) {
-        clearInterval(timer);
-        resolve({
-          granted: true,
-          adId: `preview-ad-${Date.now()}`,
-          mediator_ack_status: 'granted',
-          chips: AD_REWARD_CHIPS
-        });
-      }
-    }, 1000);
-  });
 }
 
 async function approvePiPaymentOnServer(paymentId, metadata) {

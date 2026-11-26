@@ -9,6 +9,7 @@ import {
   limit,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -56,6 +57,8 @@ export async function ensureUserProfile(playerId, displayName) {
       handsPlayed: 0,
       handsWon: 0,
       soundEnabled: true,
+      hideBalance: false,
+      adHistory: [],
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp()
     });
@@ -88,6 +91,8 @@ export async function updateUserProfileFields(playerId, fields) {
   if (fields.handsPlayed !== undefined) updates.handsPlayed = Math.max(0, Math.floor(fields.handsPlayed));
   if (fields.handsWon !== undefined) updates.handsWon = Math.max(0, Math.floor(fields.handsWon));
   if (fields.soundEnabled !== undefined) updates.soundEnabled = Boolean(fields.soundEnabled);
+  if (fields.hideBalance !== undefined) updates.hideBalance = Boolean(fields.hideBalance);
+  if (Array.isArray(fields.adHistory)) updates.adHistory = fields.adHistory;
 
   try {
     await updateDoc(docRef, updates);
@@ -103,6 +108,8 @@ export async function updateUserProfileFields(playerId, fields) {
         handsPlayed: updates.handsPlayed ?? 0,
         handsWon: updates.handsWon ?? 0,
         soundEnabled: updates.soundEnabled ?? true,
+        hideBalance: updates.hideBalance ?? false,
+        adHistory: updates.adHistory ?? [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp()
       });
@@ -255,7 +262,6 @@ export async function findOrCreatePublicRoom({
   const safeBoot = [50, 100, 200].includes(bootAmount) ? bootAmount : 100;
   const safeMax = Math.max(2, Math.min(5, maxPlayers));
 
-  // Single-field equality query matching firestore.rules (zero composite indexes required)
   const q = query(
     collection(db, 'rooms'),
     where('matchmakingState', '==', 'public_waiting'),
@@ -362,4 +368,76 @@ export async function closeOnlineRoom(roomCode) {
     bannerMessage: 'Table closed by host',
     updatedAt: serverTimestamp()
   });
+}
+
+export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
+  const cleanRecipient = String(recipientInput || '').trim().replace(/^@/, '');
+  const amount = Math.floor(Number(rawAmount));
+
+  if (!senderUid) throw new Error('Player session not ready.');
+  if (!cleanRecipient) throw new Error("Enter your friend's Pi username or Player ID.");
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Enter a valid chip amount greater than 0.');
+  }
+
+  let recipientUid = null;
+  let recipientName = cleanRecipient;
+
+  const directSnap = await getDoc(doc(db, 'users', cleanRecipient));
+  if (directSnap.exists()) {
+    recipientUid = directSnap.id;
+    recipientName = directSnap.data().pioneerName || cleanRecipient;
+  } else {
+    const q = query(
+      collection(db, 'users'),
+      where('pioneerName', '==', cleanRecipient),
+      limit(1)
+    );
+    const snap = await getDocs(q);
+    if (!snap.empty) {
+      recipientUid = snap.docs[0].id;
+      recipientName = snap.docs[0].data().pioneerName || cleanRecipient;
+    }
+  }
+
+  if (!recipientUid) {
+    throw new Error(`Player "${cleanRecipient}" not found. Ask them to open the game once first.`);
+  }
+  if (recipientUid === senderUid) {
+    throw new Error('You cannot send chips to your own account.');
+  }
+
+  const senderRef = doc(db, 'users', senderUid);
+  const recipientRef = doc(db, 'users', recipientUid);
+
+  const newSenderBalance = await runTransaction(db, async (tx) => {
+    const senderSnap = await tx.get(senderRef);
+    const recipientSnap = await tx.get(recipientRef);
+
+    if (!senderSnap.exists()) throw new Error('Sender profile not found.');
+    if (!recipientSnap.exists()) throw new Error('Friend profile not found.');
+
+    const senderChips = Number(senderSnap.data().chipsBalance || 0);
+    const recipientChips = Number(recipientSnap.data().chipsBalance || 0);
+
+    if (senderChips < amount) {
+      throw new Error(`Insufficient chips. You have ${senderChips.toLocaleString('en-US')}.`);
+    }
+
+    const updatedSender = senderChips - amount;
+    const updatedRecipient = recipientChips + amount;
+
+    tx.update(senderRef, {
+      chipsBalance: updatedSender,
+      updatedAt: serverTimestamp()
+    });
+    tx.update(recipientRef, {
+      chipsBalance: updatedRecipient,
+      updatedAt: serverTimestamp()
+    });
+
+    return updatedSender;
+  });
+
+  return { newSenderBalance, recipientName, amount };
 }

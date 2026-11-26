@@ -102,11 +102,10 @@ export async function verifyAndGrantAdReward(adId) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ adId })
   });
+  const payload = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    const errBody = await resp.json().catch(() => ({}));
-    throw new Error(errBody.error || `Ad verification failed (HTTP ${resp.status})`);
+    throw new Error(payload.error || `Ad verification failed (HTTP ${resp.status})`);
   }
-  const payload = await resp.json();
   const granted = payload?.mediator_ack_status === 'granted';
   return {
     granted,
@@ -115,7 +114,7 @@ export async function verifyAndGrantAdReward(adId) {
     chips: granted ? AD_REWARD_CHIPS : 0,
     reason: granted
       ? null
-      : `Pi Ad status: ${payload?.mediator_ack_status || 'not granted'}`
+      : `Pi verify status: ${payload?.mediator_ack_status || 'not granted'}`
   };
 }
 

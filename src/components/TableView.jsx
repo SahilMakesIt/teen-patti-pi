@@ -69,10 +69,10 @@ function SeatBadge({
         {isDealer && <span className="dealer-chip">D</span>}
       </div>
       <div className="seat-chips">
-        {isMasked
-          ? 'Hidden'
-          : `${seat.chips.toLocaleString('en-US')}${isHero && heroHideBalance ? ' (Hidden)' : ''}`}
-      </div>
+  {isMasked
+    ? 'Hidden'
+    : `${seat.chips.toLocaleString('en-US')}${isHero && heroHideBalance ? ' (Hidden to others)' : ''}`}
+</div>
       {seat.cards && seat.cards.length > 0 && (
         <div className="seat-cards-row">
           {seat.cards.slice(0, dealtStage).map((card, i) =>
@@ -128,7 +128,20 @@ export function TableView({
   const [copiedCode, setCopiedCode] = useState(false);
   const [isVoiceMutedByListener, setIsVoiceMutedByListener] = useState(false);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
+const [localHideBalance, setLocalHideBalance] = useState(Boolean(hideBalance));
 
+  React.useEffect(() => {
+    setLocalHideBalance(Boolean(hideBalance));
+  }, [hideBalance]);
+
+  const effectiveHideBalance = onToggleHideBalance ? Boolean(hideBalance) : localHideBalance;
+
+  const handleEyeClick = () => {
+    setLocalHideBalance((prev) => !prev);
+    if (onToggleHideBalance) {
+      onToggleHideBalance();
+    }
+  };
   const players = tableState.players || [];
   const currentTurnPlayer = getCurrentPlayer(tableState);
   const isOnline = tableState.mode?.isOnline;
@@ -185,17 +198,16 @@ export function TableView({
         </button>
         <div className="table-status-pill">{centerPill}</div>
         <div className="icon-actions">
-          {onToggleHideBalance && (
-            <button
-              className="icon-btn"
-              style={{ color: hideBalance ? 'var(--gold)' : 'var(--text-secondary)' }}
-              onClick={onToggleHideBalance}
-              title={hideBalance ? 'Balance Hidden from Table (Click to Show)' : 'Hide Balance from Table'}
-              aria-label="Toggle Balance Visibility"
-            >
-              {hideBalance ? <EyeOff size={19} /> : <Eye size={19} />}
-            </button>
-          )}
+      <button
+        type="button"
+        className="icon-btn"
+        style={{ color: effectiveHideBalance ? 'var(--gold)' : 'var(--text-secondary)' }}
+        onClick={handleEyeClick}
+        title={effectiveHideBalance ? 'Balance Hidden from Table (Click to Show)' : 'Hide Balance from Table'}
+        aria-label="Toggle Balance Visibility"
+      >
+        {effectiveHideBalance ? <EyeOff size={19} /> : <Eye size={19} />}
+      </button>
           <button
             className="icon-btn"
             style={{ color: 'var(--gold)' }}
@@ -261,7 +273,7 @@ export function TableView({
             seat={heroSeat}
             positionClass="seat-hero"
             isHero
-            heroHideBalance={hideBalance}
+            heroHideBalance={effectiveHideBalance}
             isSpeaking={isLocalSpeaking}
             isTurn={currentTurnPlayer?.id === heroSeat.id && tableState.phase === TABLE_PHASE.BETTING}
             isDealer={tableState.dealerIndex === heroSeat.seatIndex}

@@ -100,7 +100,9 @@ export default function TableVoiceControls({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
+          autoGainControl: false,
+          channelCount: 1,
+          sampleRate: 48000,
         },
         video: false,
       });

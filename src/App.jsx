@@ -46,7 +46,7 @@ import {
   observeUserProfile,
   syncRoomAndSeats,
   updateUserProfileFields
-} from './firebase/teenPattiFirebase';
+}
 import {
   closeOnlineRoom,
   createOnlineRoom,

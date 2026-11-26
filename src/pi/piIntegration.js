@@ -138,16 +138,24 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
         }
       }
       showResult = await window.Pi.Ads.showAd('rewarded');
-      if (showResult?.result === 'AD_REWARDED' && showResult?.adId) {
-        return await verifyAndGrantAdReward(showResult.adId);
-      }
-      return {
-        granted: false,
-        adId: showResult?.adId || null,
-        reason: showResult?.result
-          ? `Ad not rewarded (${showResult.result}).`
-          : 'Ad closed before reward completion.'
-      };
+if (showResult?.result === 'AD_REWARDED') {
+  if (showResult?.adId) {
+    return await verifyAndGrantAdReward(showResult.adId);
+  }
+  return {
+    granted: true,
+    chips: AD_REWARD_CHIPS,
+    adId: null,
+    mediator_ack_status: 'granted'
+  };
+}
+return {
+  granted: false,
+  adId: showResult?.adId || null,
+  reason: showResult?.result
+    ? `Ad not rewarded (${showResult.result}).`
+    : 'Ad closed before reward completion.'
+};
     } finally {
       clearInterval(timer);
     }

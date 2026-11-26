@@ -1,34 +1,61 @@
 import React, { useState } from 'react';
-import { PlayCircle, Wallet, X } from 'lucide-react';
+import { PlayCircle, Send, Wallet, X } from 'lucide-react';
 import { HAND_CATEGORIES, LOW_CHIPS_THRESHOLD } from '../engine/teenPattiEngine';
 
 const PI_PACKS = [
   { quantity: 1, label: '1x', chips: 10000, piLabel: '0.25 Pi' },
   { quantity: 2, label: '2x', chips: 20000, piLabel: '0.50 Pi' },
-  { quantity: 5, label: '5x', chips: 50000, piLabel: '1.25 Pi' }
+  { quantity: 5, label: '5x', chips: 50000, piLabel: '1.25 Pi' },
 ];
+
+const GIFT_PRESETS = [1000, 5000, 25000, 100000];
 
 export function RefillChipsModal({
   playerName,
   currentChips,
   isAdPreviewRunning,
   adPreviewSecondsLeft,
+  adCooldown,
   isPiPaymentBusy,
+  isGiftBusy = false,
   statusMessage,
   onWatchVideoAd,
   onBuyPiChipsPack,
-  onDismiss
+  onGiftChips,
+  onDismiss,
 }) {
   const [selectedQty, setSelectedQty] = useState(1);
+  const [giftRecipient, setGiftRecipient] = useState('');
+  const [giftAmount, setGiftAmount] = useState('5000');
+
   const selectedPack = PI_PACKS.find((p) => p.quantity === selectedQty) || PI_PACKS[0];
-  const busy = isAdPreviewRunning || isPiPaymentBusy;
+  const busy = isAdPreviewRunning || isPiPaymentBusy || isGiftBusy;
+
+  const adBlockedByCooldown = adCooldown && !adCooldown.canWatch;
+  const adButtonLabel = isAdPreviewRunning
+    ? `Ad Preview (${adPreviewSecondsLeft}s)...`
+    : adCooldown?.buttonText || 'Watch Ad Video (+2,500 Free Chips)';
+
+  const parsedGiftAmount = Math.max(0, Math.floor(Number(giftAmount) || 0));
+  const canSendGift =
+    Boolean(onGiftChips) &&
+    !busy &&
+    giftRecipient.trim().length >= 2 &&
+    parsedGiftAmount >= 100 &&
+    parsedGiftAmount <= currentChips;
+
+  const handleGiftSubmit = (e) => {
+    e.preventDefault();
+    if (!canSendGift) return;
+    onGiftChips(giftRecipient.trim().replace(/^@/, ''), parsedGiftAmount);
+  };
 
   return (
     <div className="modal-backdrop" onClick={() => !busy && onDismiss()}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div>
-            <h2 className="modal-title">Chip Store</h2>
+            <h2 className="modal-title">Chip Store & Gift Chips</h2>
             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
               {playerName} • {currentChips.toLocaleString('en-US')} Chips
             </div>
@@ -45,7 +72,7 @@ export function RefillChipsModal({
               color: 'var(--amber)',
               borderRadius: 10,
               padding: '8px 10px',
-              fontSize: 12
+              fontSize: 12,
             }}
           >
             Balance below 500 — grab a chip pack or watch a short ad to keep playing.
@@ -59,7 +86,7 @@ export function RefillChipsModal({
               color: 'var(--emerald)',
               borderRadius: 10,
               padding: '8px 10px',
-              fontSize: 12
+              fontSize: 12,
             }}
           >
             {statusMessage}
@@ -107,14 +134,80 @@ export function RefillChipsModal({
         </div>
 
         <div className="store-box emerald-border">
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--emerald)' }}>Free Ad Reward</div>
-          <button type="button" disabled={busy} className="dock-btn call" onClick={onWatchVideoAd}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
+            <span style={{ color: 'var(--emerald)' }}>Free Ad Reward (+2,500 Chips)</span>
+            <span style={{ color: 'var(--text-secondary)' }}>
+              {adCooldown ? `${adCooldown.adsRemaining}/7 left today • 5m cooldown` : 'Max 7 / 24h'}
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled={busy || adBlockedByCooldown}
+            className="dock-btn call"
+            style={adBlockedByCooldown ? { opacity: 0.65, cursor: 'not-allowed' } : undefined}
+            onClick={onWatchVideoAd}
+          >
             <PlayCircle size={18} />
-            {isAdPreviewRunning
-              ? `Ad Preview (${adPreviewSecondsLeft}s)...`
-              : 'Watch Ad Video (+2,500 Free Chips)'}
+            {adButtonLabel}
           </button>
         </div>
+
+        {onGiftChips && (
+          <form onSubmit={handleGiftSubmit} className="store-box" style={{ border: '1px solid rgba(242, 201, 76, 0.35)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
+              <span style={{ color: 'var(--gold)' }}>Send Play Chips to a Friend</span>
+              <span style={{ color: 'var(--text-secondary)' }}>Min 100 Chips</span>
+            </div>
+
+            <input
+              type="text"
+              className="code-input"
+              style={{ letterSpacing: 'normal', width: '100%' }}
+              placeholder="Friend's Pi Username or Player ID"
+              value={giftRecipient}
+              disabled={busy}
+              onChange={(e) => setGiftRecipient(e.target.value)}
+            />
+
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {GIFT_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  disabled={busy || currentChips < preset}
+                  className={`pill-btn ${Number(giftAmount) === preset ? 'active-gold' : ''}`}
+                  style={{ flex: 1, padding: '5px 6px', fontSize: 11 }}
+                  onClick={() => setGiftAmount(String(preset))}
+                >
+                  +{preset >= 1000 ? `${preset / 1000}K` : preset}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="number"
+                min={100}
+                max={currentChips}
+                className="code-input"
+                style={{ letterSpacing: 'normal', flex: 1 }}
+                placeholder="Amount"
+                value={giftAmount}
+                disabled={busy}
+                onChange={(e) => setGiftAmount(e.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={!canSendGift}
+                className="dock-btn raise"
+                style={{ flex: 1.4, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+              >
+                <Send size={15} />
+                {isGiftBusy ? 'Sending...' : 'Send Chips'}
+              </button>
+            </div>
+          </form>
+        )}
 
         <div className="notice-box">
           One-way entertainment purchase only. Play Chips have zero monetary value and cannot be redeemed or exchanged for Pi.
@@ -161,7 +254,7 @@ export function PiProfileModal({
   isConnecting,
   onConnectWithPi,
   onSaveNickname,
-  onDismiss
+  onDismiss,
 }) {
   const [nickname, setNickname] = useState(currentName || '');
   return (

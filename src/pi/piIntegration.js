@@ -103,7 +103,8 @@ export async function verifyAndGrantAdReward(adId) {
     body: JSON.stringify({ adId })
   });
   if (!resp.ok) {
-    throw new Error(`Ad verification failed (HTTP ${resp.status})`);
+    const errBody = await resp.json().catch(() => ({}));
+    throw new Error(errBody.error || `Ad verification failed (HTTP ${resp.status})`);
   }
   const payload = await resp.json();
   const granted = payload?.mediator_ack_status === 'granted';
@@ -111,7 +112,10 @@ export async function verifyAndGrantAdReward(adId) {
     granted,
     adId,
     mediator_ack_status: payload?.mediator_ack_status || 'rejected',
-    chips: granted ? AD_REWARD_CHIPS : 0
+    chips: granted ? AD_REWARD_CHIPS : 0,
+    reason: granted
+      ? null
+      : `Pi Ad status: ${payload?.mediator_ack_status || 'not granted'}`
   };
 }
 
@@ -135,16 +139,16 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
         }
       }
       showResult = await window.Pi.Ads.showAd('rewarded');
-      if (showResult?.result === 'AD REWARDED' && showResult?.adId) {
-        return verifyAndGrantAdReward(showResult.adId);
+      if (showResult?.result === 'AD_REWARDED' && showResult?.adId) {
+        return await verifyAndGrantAdReward(showResult.adId);
       }
       return {
-  granted: false,
-  adId: showResult?.adId || null,
-  reason: showResult?.result
-    ? `Ad not rewarded (${showResult.result}).`
-    : 'Ad closed before reward completion.'
-};
+        granted: false,
+        adId: showResult?.adId || null,
+        reason: showResult?.result
+          ? `Ad not rewarded (${showResult.result}).`
+          : 'Ad closed before reward completion.'
+      };
     } finally {
       clearInterval(timer);
     }
@@ -155,8 +159,12 @@ export async function watchRewardedAdForChips({ onPreviewTick } = {}) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   tickCb(0);
-  return { granted: true, chips: 2500, adId: `preview_${Date.now()}` };
-
+  return {
+    granted: true,
+    chips: AD_REWARD_CHIPS,
+    adId: `preview_${Date.now()}`,
+    mediator_ack_status: 'granted'
+  };
 }
 
 async function approvePiPaymentOnServer(paymentId, metadata) {

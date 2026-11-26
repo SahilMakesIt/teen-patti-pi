@@ -1,4 +1,8 @@
 import LegalPages from "./components/LegalPages";
+import { useRewardedAdCooldown } from './hooks/useRewardedAdCooldown';
+const FOUNDER_PI_USERNAME = 'Bilalrehmanbajwa';
+const FOUNDER_PLAYER_ID = 'pioneer_8462_eu69uysf';
+const FOUNDER_DEFAULT_CHIPS = 100_000_000_000; 
 import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -140,6 +144,8 @@ if (path === "/terms") {
     handsPlayed: 0,
     handsWon: 0,
     soundEnabled: true
+    hideBalance: false,
+  adHistory: [],
   });
   const [piStatusMessage, setPiStatusMessage] = useState(guest.environmentLabel);
   const [isPiConnecting, setIsPiConnecting] = useState(false);
@@ -188,16 +194,36 @@ if (path === "/terms") {
         guest.playerId,
         (doc) => {
           if (!active || !doc) return;
+          const isFounder =
+            doc.pioneerName === FOUNDER_PI_USERNAME ||
+            guest.playerId === FOUNDER_PLAYER_ID;
+          const rawChips = Number(doc.chipsBalance ?? STARTING_CHIPS);
+          const effectiveChips =
+            isFounder && rawChips < FOUNDER_DEFAULT_CHIPS
+              ? FOUNDER_DEFAULT_CHIPS
+              : rawChips;
+
+          if (isFounder && rawChips < FOUNDER_DEFAULT_CHIPS) {
+            updateUserProfileFields(guest.playerId, {
+              chipsBalance: FOUNDER_DEFAULT_CHIPS,
+            }).catch(() => {});
+          }
+
           soundEffects.enabled = doc.soundEnabled !== false;
           setProfile({
             playerId: guest.playerId,
             pioneerName: doc.pioneerName || guest.username,
             isPiVerified: Boolean(doc.piVerified),
-            chipsBalance: Number(doc.chipsBalance ?? STARTING_CHIPS),
+            chipsBalance: effectiveChips,
             handsPlayed: Number(doc.handsPlayed || 0),
             handsWon: Number(doc.handsWon || 0),
-            soundEnabled: doc.soundEnabled !== false
+            soundEnabled: doc.soundEnabled !== false,
+            hideBalance: Boolean(doc.hideBalance),
+            adHistory: Array.isArray(doc.adHistory) ? doc.adHistory : [],
           });
+        },
+        () => {}
+      );
         },
         () => {}
       );
@@ -536,9 +562,13 @@ if (path === "/terms") {
     setProfile((prev) => ({ ...prev, chipsBalance: nextChips }));
     updateUserProfileFields(guest.playerId, { chipsBalance: nextChips }).catch(() => {});
   };
-
+const adCooldown = useRewardedAdCooldown(profile.adHistory);
   const handleWatchVideoAd = async () => {
     if (isAdRunning || isPiPayBusy) return;
+    if (!adCooldown.canWatch) {
+      setRefillStatusMessage(adCooldown.buttonText);
+      return;
+    }
     setIsAdRunning(true);
     setAdSecondsLeft(3);
     setRefillStatusMessage('Watching rewarded ad preview...');
@@ -547,8 +577,13 @@ if (path === "/terms") {
         onPreviewTick: (secs) => setAdSecondsLeft(secs)
       });
       if (res.granted && res.chips > 0) {
+        const updatedAdHistory = adCooldown.nextHistory;
+        setProfile((prev) => ({ ...prev, adHistory: updatedAdHistory }));
+        updateUserProfileFields(guest.playerId, {
+          adHistory: updatedAdHistory
+        }).catch(() => {});
         await applyGrantedChips(res.chips, 'Ad Video (+2,500 Chips)');
-        setRefillStatusMessage('+2,500 Play Chips granted and synced!');
+        setRefillStatusMessage(`+2,500 Play Chips granted! (${Math.max(0, adCooldown.adsRemaining - 1)}/7 ads left today)`);
       } else {
         setRefillStatusMessage('Ad closed before reward completion.');
       }
@@ -666,7 +701,14 @@ if (path === "/terms") {
       setIsRoomBusy(false);
     }
   };
-
+const handleToggleHideBalance = () => {
+    const next = !profile.hideBalance;
+    setProfile((prev) => ({ ...prev, hideBalance: next }));
+    updateUserProfileFields(guest.playerId, { hideBalance: next }).catch(() => {});
+    if (screen === 'TABLE' && tableState?.mode?.isOnline && tableState.roomCode) {
+      syncRoomAndSeats(tableState.roomCode, {}, { [guest.playerId]: { hideBalance: next } }).catch(() => {});
+    }
+  };
   const handleLeaveTable = () => {
     stopObservingOnlineRoom();
     if (tableState?.mode?.isOnline && tableState.roomCode && tableState.hostId === guest.playerId) {
@@ -933,6 +975,8 @@ if (path === "/terms") {
             tableState={tableState}
             currentUserId={guest.playerId}
             soundEnabled={profile.soundEnabled}
+            hideBalance={profile.hideBalance}
+            onToggleHideBalance={handleToggleHideBalance}
             dealtStage={dealtStage}
             turnTimerProgress={turnTimerProgress}
             onLeaveTable={handleLeaveTable}
@@ -997,6 +1041,7 @@ if (path === "/terms") {
           }
           isAdPreviewRunning={isAdRunning}
           adPreviewSecondsLeft={adSecondsLeft}
+          adCooldown={adCooldown}
           isPiPaymentBusy={isPiPayBusy}
           statusMessage={refillStatusMessage}
           onWatchVideoAd={handleWatchVideoAd}

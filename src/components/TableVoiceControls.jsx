@@ -21,29 +21,6 @@ const RTDB_CONFIG = {
   appId: '1:1066539831175:web:0b9e4951742ce86c2ecd22',
 };
 
-const ICE_SERVERS = {
-  iceServers: [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject',
-    },
-  ],
-  iceCandidatePoolSize: 10,
-};
-
 function getRtdb() {
   const app = getApps().length > 0 ? getApps()[0] : initializeApp(RTDB_CONFIG);
   return getDatabase(app);
@@ -59,37 +36,37 @@ export default function TableVoiceControls({
   const [isHandsFree, setIsHandsFree] = useState(false);
   const [isHoldingMic, setIsHoldingMic] = useState(false);
   const [micError, setMicError] = useState('');
-  const [voiceStatus, setVoiceStatus] = useState('Idle');
+  const [peerCount, setPeerCount] = useState(0);
 
   const streamRef = useRef(null);
-  const peersRef = useRef({});
-  const audioElsRef = useRef({});
+  const recorderRef = useRef(null);
+  const loopTimerRef = useRef(null);
   const mutedRef = useRef(isVoiceMutedByListener);
+  const isTransmittingRef = useRef(false);
+  const joinedAtRef = useRef(Date.now());
 
   const isTransmitting = isHandsFree || isHoldingMic;
+  isTransmittingRef.current = isTransmitting;
 
   useEffect(() => {
     mutedRef.current = isVoiceMutedByListener;
-    Object.values(audioElsRef.current).forEach((el) => {
-      if (el) {
-        el.muted = Boolean(isVoiceMutedByListener);
-        if (!isVoiceMutedByListener && el.paused) {
-          el.play().catch(() => {});
-        }
-      }
-    });
   }, [isVoiceMutedByListener]);
 
-  function unlockAllRemoteAudio() {
-    Object.values(audioElsRef.current).forEach((el) => {
-      if (el && el.paused) {
-        el.play().catch(() => {});
+  // Unlock Android WebView audio playback on any user tap
+  function unlockWebViewAudio() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       }
-    });
+    } catch (_e) {}
   }
 
   async function ensureMicStream() {
-    if (streamRef.current) return streamRef.current;
+    if (streamRef.current && streamRef.current.active) {
+      return streamRef.current;
+    }
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -103,252 +80,168 @@ export default function TableVoiceControls({
     return stream;
   }
 
+  function stopActiveRecording() {
+    if (loopTimerRef.current) {
+      clearTimeout(loopTimerRef.current);
+      loopTimerRef.current = null;
+    }
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      try {
+        recorderRef.current.stop();
+      } catch (_e) {}
+    }
+    recorderRef.current = null;
+  }
+
+  // Record & send audio clip ONLY while Hold to Talk is held OR Hands-Free is checked
   useEffect(() => {
     let cancelled = false;
 
-    async function syncMic() {
-      if (isTransmitting) {
-        unlockAllRemoteAudio();
-        try {
-          const stream = await ensureMicStream();
-          if (cancelled) return;
-          stream.getAudioTracks().forEach((t) => {
-            t.enabled = true;
-          });
+    async function sendClipToRoom(blob) {
+      if (!blob || blob.size < 400) return;
+      if (!roomId || roomId === 'local' || !userId) return;
 
-          // Attach local mic track to every peer and trigger renegotiation
-          for (const pc of Object.values(peersRef.current)) {
-            const senders = pc.getSenders();
-            let addedNew = false;
-            stream.getAudioTracks().forEach((track) => {
-              if (!senders.some((s) => s.track === track)) {
-                pc.addTrack(track, stream);
-                addedNew = true;
-              }
-            });
-            if (addedNew && typeof pc._renegotiate === 'function') {
-              await pc._renegotiate().catch(() => {});
-            }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64DataUrl = reader.result;
+        if (typeof base64DataUrl !== 'string') return;
+        const db = getRtdb();
+        const cleanRoom = String(roomId).trim().toUpperCase();
+        const clipsRef = ref(db, `voiceRooms/${cleanRoom}/clips`);
+        push(clipsRef, {
+          senderId: String(userId).trim(),
+          audio: base64DataUrl,
+          ts: Date.now(),
+        }).catch(() => {});
+      };
+      reader.readAsDataURL(blob);
+    }
+
+    async function startClipCycle() {
+      if (cancelled || !isTransmittingRef.current) return;
+
+      try {
+        const stream = await ensureMicStream();
+        if (cancelled || !isTransmittingRef.current) return;
+
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : '';
+
+        const chunks = [];
+        const recorder = mimeType
+          ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 24000 })
+          : new MediaRecorder(stream);
+
+        recorderRef.current = recorder;
+
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            chunks.push(e.data);
           }
+        };
 
-          onSpeakingChange?.(true);
-        } catch (_err) {
-          setMicError('Mic blocked');
-          setIsHandsFree(false);
-          setIsHoldingMic(false);
-          onSpeakingChange?.(false);
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          sendClipToRoom(blob);
+          // If Hands-Free is still checked, start the next 1.8s clip automatically
+          if (!cancelled && isTransmittingRef.current && isHandsFree) {
+            startClipCycle();
+          }
+        };
+
+        recorder.start();
+
+        // In Hands-Free mode, slice every 1.8s so the other phone hears near-real-time speech
+        if (isHandsFree) {
+          loopTimerRef.current = setTimeout(() => {
+            if (recorder.state === 'recording') {
+              recorder.stop();
+            }
+          }, 1800);
         }
-      } else {
-        if (streamRef.current) {
-          streamRef.current.getAudioTracks().forEach((t) => {
-            t.enabled = false;
-          });
-        }
+      } catch (_err) {
+        setMicError('Mic blocked');
+        setIsHandsFree(false);
+        setIsHoldingMic(false);
         onSpeakingChange?.(false);
       }
     }
 
-    syncMic();
+    if (isTransmitting) {
+      unlockWebViewAudio();
+      onSpeakingChange?.(true);
+      startClipCycle();
+    } else {
+      stopActiveRecording();
+      onSpeakingChange?.(false);
+    }
+
     return () => {
       cancelled = true;
+      stopActiveRecording();
     };
-  }, [isTransmitting]);
+  }, [isTransmitting, isHandsFree, roomId, userId]);
 
+  // Listen for incoming voice clips from other players at the table
   useEffect(() => {
     if (!roomId || roomId === 'local' || !userId) {
-      setVoiceStatus('Local');
+      setPeerCount(0);
       return undefined;
     }
 
     const db = getRtdb();
     const cleanRoom = String(roomId).trim().toUpperCase();
     const cleanUser = String(userId).trim();
+    joinedAtRef.current = Date.now();
+
     const myPresenceRef = ref(db, `voiceRooms/${cleanRoom}/peers/${cleanUser}`);
     const peersListRef = ref(db, `voiceRooms/${cleanRoom}/peers`);
+    const clipsRef = ref(db, `voiceRooms/${cleanRoom}/clips`);
 
-    setVoiceStatus('Waiting');
     set(myPresenceRef, { joinedAt: Date.now() }).catch(() => {});
     onDisconnect(myPresenceRef).remove().catch(() => {});
 
-    const unsubscribers = [];
-
-    function attachRemoteAudio(remoteId, remoteStream) {
-      let audioEl = audioElsRef.current[remoteId];
-      if (!audioEl) {
-        audioEl = document.createElement('audio');
-        audioEl.id = `voice-audio-${remoteId}`;
-        audioEl.autoplay = true;
-        audioEl.playsInline = true;
-        document.body.appendChild(audioEl);
-        audioElsRef.current[remoteId] = audioEl;
-      }
-      audioEl.srcObject = remoteStream;
-      audioEl.muted = Boolean(mutedRef.current);
-      audioEl.volume = 1.0;
-      audioEl.play().catch(() => {});
-    }
-
-    function cleanupPeer(remoteId) {
-      if (peersRef.current[remoteId]) {
-        peersRef.current[remoteId].close();
-        delete peersRef.current[remoteId];
-      }
-      if (audioElsRef.current[remoteId]) {
-        audioElsRef.current[remoteId].srcObject = null;
-        audioElsRef.current[remoteId].remove();
-        delete audioElsRef.current[remoteId];
-      }
-    }
-
-    async function setupPeerConnection(remoteId) {
-      if (peersRef.current[remoteId]) return peersRef.current[remoteId];
-
-      setVoiceStatus('Connecting');
-      const pc = new RTCPeerConnection(ICE_SERVERS);
-      peersRef.current[remoteId] = pc;
-      pc.addTransceiver('audio', { direction: 'sendrecv' });
-
-      if (streamRef.current) {
-        streamRef.current.getAudioTracks().forEach((track) => {
-          pc.addTrack(track, streamRef.current);
-        });
-      }
-
-      pc.ontrack = (event) => {
-        const [remoteStream] = event.streams;
-        if (remoteStream) {
-          attachRemoteAudio(remoteId, remoteStream);
-          setVoiceStatus('Live');
-        }
-      };
-
-      const updateState = () => {
-        const ice = pc.iceConnectionState;
-        const conn = pc.connectionState;
-        if (ice === 'connected' || ice === 'completed' || conn === 'connected') {
-          setVoiceStatus('Live');
-        } else if (ice === 'checking' || conn === 'connecting') {
-          setVoiceStatus('Connecting');
-        }
-      };
-      pc.oniceconnectionstatechange = updateState;
-      pc.onconnectionstatechange = updateState;
-
-      const pairId = [cleanUser, remoteId].sort().join('__');
-      const isOfferer = cleanUser < remoteId;
-      const offerRef = ref(db, `voiceRooms/${cleanRoom}/signals/${pairId}/offer`);
-      const answerRef = ref(db, `voiceRooms/${cleanRoom}/signals/${pairId}/answer`);
-      const myCandidatesRef = ref(
-        db,
-        `voiceRooms/${cleanRoom}/signals/${pairId}/candidates_${cleanUser}`
-      );
-      const remoteCandidatesRef = ref(
-        db,
-        `voiceRooms/${cleanRoom}/signals/${pairId}/candidates_${remoteId}`
-      );
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          push(myCandidatesRef, event.candidate.toJSON()).catch(() => {});
-        }
-      };
-
-      const pendingCandidates = [];
-      let lastOfferSdp = '';
-      let lastAnswerSdp = '';
-
-      const unsubCandidates = onChildAdded(remoteCandidatesRef, async (snap) => {
-        const cand = snap.val();
-        if (!cand) return;
-        try {
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-          } else {
-            pendingCandidates.push(cand);
-          }
-        } catch (_e) {}
-      });
-      unsubscribers.push(unsubCandidates);
-
-      // Allows late mic tracks to renegotiate SDP offer/answer
-      pc._renegotiate = async () => {
-        if (pc.signalingState !== 'stable') return;
-        const offer = await pc.createOffer({ offerToReceiveAudio: true });
-        await pc.setLocalDescription(offer);
-        await set(offerRef, { type: offer.type, sdp: offer.sdp, ts: Date.now() });
-      };
-
-      // Listen for answers (for both initial offer and mid-call mic renegotiation)
-      const unsubAnswer = onValue(answerRef, async (snap) => {
-        const ans = snap.val();
-        if (ans && ans.sdp && ans.sdp !== lastAnswerSdp && pc.signalingState === 'have-local-offer') {
-          lastAnswerSdp = ans.sdp;
-          await pc.setRemoteDescription(new RTCSessionDescription({ type: ans.type, sdp: ans.sdp }));
-          while (pendingCandidates.length > 0) {
-            const c = pendingCandidates.shift();
-            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-          }
-        }
-      });
-      unsubscribers.push(unsubAnswer);
-
-      // Listen for offers (both initial offer from offerer and mid-call renegotiation from either side)
-      const unsubOffer = onValue(offerRef, async (snap) => {
-        const off = snap.val();
-        if (off && off.sdp && off.sdp !== lastOfferSdp) {
-          if (isOfferer && !pc.currentRemoteDescription) return;
-          lastOfferSdp = off.sdp;
-          await pc.setRemoteDescription(new RTCSessionDescription({ type: off.type, sdp: off.sdp }));
-          while (pendingCandidates.length > 0) {
-            const c = pendingCandidates.shift();
-            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-          }
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          await set(answerRef, { type: answer.type, sdp: answer.sdp, ts: Date.now() });
-        }
-      });
-      unsubscribers.push(unsubOffer);
-
-      if (isOfferer) {
-        await remove(ref(db, `voiceRooms/${cleanRoom}/signals/${pairId}`)).catch(() => {});
-        const offer = await pc.createOffer({ offerToReceiveAudio: true });
-        await pc.setLocalDescription(offer);
-        await set(offerRef, { type: offer.type, sdp: offer.sdp, ts: Date.now() });
-      }
-
-      return pc;
-    }
-
     const unsubPeers = onValue(peersListRef, (snap) => {
-      const peersData = snap.val() || {};
-      const activeIds = Object.keys(peersData).filter((id) => id !== cleanUser);
-
-      if (activeIds.length === 0) {
-        setVoiceStatus('Waiting');
-      }
-
-      activeIds.forEach((remoteId) => {
-        setupPeerConnection(remoteId).catch(() => {});
-      });
-
-      Object.keys(peersRef.current).forEach((existingId) => {
-        if (!activeIds.includes(existingId)) {
-          cleanupPeer(existingId);
-        }
-      });
+      const data = snap.val() || {};
+      const others = Object.keys(data).filter((id) => id !== cleanUser);
+      setPeerCount(others.length);
     });
-    unsubscribers.push(unsubPeers);
+
+    const unsubClips = onChildAdded(clipsRef, (snap) => {
+      const clip = snap.val();
+      if (!clip || !clip.audio) return;
+      if (clip.senderId === cleanUser) return;
+      if (clip.ts && clip.ts < joinedAtRef.current - 3000) return;
+
+      // Auto-clean played clip from RTDB after 5 seconds
+      setTimeout(() => {
+        remove(snap.ref).catch(() => {});
+      }, 5000);
+
+      if (mutedRef.current) return;
+
+      try {
+        const audio = new Audio(clip.audio);
+        audio.volume = 1.0;
+        audio.play().catch(() => {});
+      } catch (_e) {}
+    });
 
     return () => {
-      unsubscribers.forEach((u) => typeof u === 'function' && u());
-      Object.keys(peersRef.current).forEach(cleanupPeer);
+      unsubPeers();
+      unsubClips();
       remove(myPresenceRef).catch(() => {});
     };
   }, [roomId, userId]);
 
   useEffect(() => {
     return () => {
+      stopActiveRecording();
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
@@ -372,16 +265,23 @@ export default function TableVoiceControls({
       <button
         type="button"
         disabled={isHandsFree}
-        onMouseDown={() => !isHandsFree && setIsHoldingMic(true)}
+        onMouseDown={() => {
+          if (!isHandsFree) {
+            unlockWebViewAudio();
+            setIsHoldingMic(true);
+          }
+        }}
         onMouseUp={() => !isHandsFree && setIsHoldingMic(false)}
         onMouseLeave={() => !isHandsFree && setIsHoldingMic(false)}
         onTouchStart={(e) => {
           if (!isHandsFree) {
             e.preventDefault();
+            unlockWebViewAudio();
             setIsHoldingMic(true);
           }
         }}
         onTouchEnd={() => !isHandsFree && setIsHoldingMic(false)}
+        onTouchCancel={() => !isHandsFree && setIsHoldingMic(false)}
         style={{
           padding: '5px 11px',
           borderRadius: '8px',
@@ -391,6 +291,7 @@ export default function TableVoiceControls({
           fontSize: '12px',
           fontWeight: 700,
           cursor: isHandsFree ? 'default' : 'pointer',
+          userSelect: 'none',
         }}
       >
         {isTransmitting ? '🎙️ Speaking...' : '🎙️ Hold to Talk'}
@@ -411,7 +312,7 @@ export default function TableVoiceControls({
           type="checkbox"
           checked={isHandsFree}
           onChange={(e) => {
-            unlockAllRemoteAudio();
+            unlockWebViewAudio();
             setIsHandsFree(e.target.checked);
             if (e.target.checked) setIsHoldingMic(false);
           }}
@@ -422,7 +323,7 @@ export default function TableVoiceControls({
       <button
         type="button"
         onClick={() => {
-          unlockAllRemoteAudio();
+          unlockWebViewAudio();
           onToggleListenerMute();
         }}
         title="Mute or unmute table voice without affecting game sounds"
@@ -440,11 +341,10 @@ export default function TableVoiceControls({
         {isVoiceMutedByListener ? '🔇 Voice Muted' : '🔊 Voice On'}
       </button>
 
-      {voiceStatus === 'Live' && (
-        <span style={{ color: '#4ade80', fontSize: '11px', fontWeight: 700 }}>● Voice Live</span>
-      )}
-      {voiceStatus === 'Connecting' && (
-        <span style={{ color: '#facc15', fontSize: '11px', fontWeight: 600 }}>● Connecting...</span>
+      {peerCount > 0 && (
+        <span style={{ color: '#4ade80', fontSize: '11px', fontWeight: 700 }}>
+          ● Voice Live ({peerCount + 1})
+        </span>
       )}
 
       {micError && (

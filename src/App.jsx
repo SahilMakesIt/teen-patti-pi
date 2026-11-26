@@ -48,11 +48,18 @@ import {
   updateUserProfileFields
 } from './firebase/teenPattiFirebase';
 import {
-  authenticateWithPi,
-  createPiChipsPayment,
-  getOrCreateGuestIdentity,
-  watchRewardedAdForChips
-} from './pi/piIntegration';
+  closeOnlineRoom,
+  createOnlineRoom,
+  ensureUserProfile,
+  findOrCreatePublicRoom,
+  giftChipsToFriend,
+  joinOnlineRoom,
+  observeRoom,
+  observeRoomSeats,
+  observeUserProfile,
+  syncRoomAndSeats,
+  updateUserProfileFields
+} from './firebase/teenPattiFirebase';
 import { PiProfileModal, RefillChipsModal, RulesModal } from './components/Modals';
 import { TableView } from './components/TableView';
 
@@ -451,7 +458,7 @@ if (path === "/terms") {
       return undefined;
     }
 
-    const totalMs = 25000;
+    const totalMs = 30000;
     const startedAt = Date.now();
     setTurnTimerProgress(1);
 
@@ -621,7 +628,21 @@ const adCooldown = useRewardedAdCooldown(profile.adHistory);
       setIsPiPayBusy(false);
     }
   };
-
+const handleGiftChips = async (recipientInput, amount) => {
+    if (isAdRunning || isPiPayBusy) return;
+    setRefillStatusMessage('Sending chips to friend...');
+    const res = await giftChipsToFriend(guest.playerId, recipientInput, amount);
+    setProfile((prev) => ({ ...prev, chipsBalance: res.newSenderBalance }));
+    if (tableState && Array.isArray(tableState.players)) {
+      const updatedPlayers = tableState.players.map((p) =>
+        p.id === guest.playerId ? { ...p, chips: res.newSenderBalance } : p
+      );
+      setTableState((prev) => (prev ? { ...prev, players: updatedPlayers } : prev));
+    }
+    setRefillStatusMessage(
+      `Sent ${res.amount.toLocaleString('en-US')} Play Chips to ${res.recipientName}!`
+    );
+  };
   const handleEnterTable = async () => {
     setCloudMessage(null);
     persistedHandRef.current = 0;
@@ -1045,6 +1066,7 @@ const handleToggleHideBalance = () => {
           statusMessage={refillStatusMessage}
           onWatchVideoAd={handleWatchVideoAd}
           onBuyPiChipsPack={handleBuyPiChips}
+          onGiftChips={handleGiftChips}
           onDismiss={() => {
             if (!isAdRunning && !isPiPayBusy) setIsRefillOpen(false);
           }}

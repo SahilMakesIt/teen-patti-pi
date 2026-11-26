@@ -179,6 +179,7 @@ if (path === "/terms") {
   const [refillStatusMessage, setRefillStatusMessage] = useState(null);
 
   const lowPromptKeyRef = useRef(null);
+  const adInFlightRef = useRef(false);
   const persistedHandRef = useRef(0);
   const autoStartKeyRef = useRef(null);
   const onlineRoomUnsubRef = useRef(null);
@@ -570,36 +571,42 @@ if (path === "/terms") {
   };
 const adCooldown = useRewardedAdCooldown(profile.adHistory);
   const handleWatchVideoAd = async () => {
-    if (isAdRunning || isPiPayBusy) return;
-    if (!adCooldown.canWatch) {
-      setRefillStatusMessage(adCooldown.buttonText);
-      return;
+  if (adInFlightRef.current || isAdRunning || isPiPayBusy) return;
+  if (!adCooldown.canWatch) {
+    setRefillStatusMessage(adCooldown.buttonText);
+    return;
+  }
+  adInFlightRef.current = true;
+  setIsAdRunning(true);
+  setAdSecondsLeft(3);
+  setRefillStatusMessage('Watching rewarded ad...');
+  try {
+    const res = await watchRewardedAdForChips({
+      onPreviewTick: (secs) => setAdSecondsLeft(secs)
+    });
+    if (res.granted && res.chips > 0) {
+      const updatedAdHistory = adCooldown.nextHistory;
+      setProfile((prev) => ({ ...prev, adHistory: updatedAdHistory }));
+      updateUserProfileFields(guest.playerId, {
+        adHistory: updatedAdHistory
+      }).catch(() => {});
+      await applyGrantedChips(res.chips, 'Ad Video (+2,500 Chips)');
+      setRefillStatusMessage(
+        `+2,500 Play Chips granted! (${Math.max(0, adCooldown.adsRemaining - 1)}/7 ads left today)`
+      );
+    } else {
+      setRefillStatusMessage(
+        res.reason || 'Ad closed before reward completion—watch until reward finishes.'
+      );
     }
-    setIsAdRunning(true);
-    setAdSecondsLeft(3);
-    setRefillStatusMessage('Watching rewarded ad preview...');
-    try {
-      const res = await watchRewardedAdForChips({
-        onPreviewTick: (secs) => setAdSecondsLeft(secs)
-      });
-      if (res.granted && res.chips > 0) {
-        const updatedAdHistory = adCooldown.nextHistory;
-        setProfile((prev) => ({ ...prev, adHistory: updatedAdHistory }));
-        updateUserProfileFields(guest.playerId, {
-          adHistory: updatedAdHistory
-        }).catch(() => {});
-        await applyGrantedChips(res.chips, 'Ad Video (+2,500 Chips)');
-        setRefillStatusMessage(`+2,500 Play Chips granted! (${Math.max(0, adCooldown.adsRemaining - 1)}/7 ads left today)`);
-      } else {
-        setRefillStatusMessage('Ad closed before reward completion.');
-      }
-    } catch (err) {
-      setRefillStatusMessage(err?.message || 'Unable to verify ad reward.');
-    } finally {
-      setIsAdRunning(false);
-      setAdSecondsLeft(0);
-    }
-  };
+  } catch (err) {
+    setRefillStatusMessage(err?.message || 'Unable to verify ad reward.');
+  } finally {
+    adInFlightRef.current = false;
+    setIsAdRunning(false);
+    setAdSecondsLeft(0);
+  }
+};
 
   const handleBuyPiChips = async (qty) => {
     if (isAdRunning || isPiPayBusy) return;

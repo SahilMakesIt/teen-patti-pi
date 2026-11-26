@@ -1,5 +1,4 @@
 import LegalPages from "./components/LegalPages";
-import { useRewardedAdCooldown } from './hooks/useRewardedAdCooldown';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
@@ -565,48 +564,35 @@ export default function App() {
     updateUserProfileFields(guest.playerId, { chipsBalance: nextChips }).catch(() => {});
   };
 
-  const adCooldown = useRewardedAdCooldown(profile.adHistory);
-
   const handleWatchVideoAd = async () => {
-    if (adInFlightRef.current || isAdRunning || isPiPayBusy) return;
-    if (!adCooldown.canWatch) {
-      setRefillStatusMessage(adCooldown.buttonText);
-      return;
+  if (adInFlightRef.current || isAdRunning || isPiPayBusy) return;
+
+  adInFlightRef.current = true;
+  setIsAdRunning(true);
+  setAdSecondsLeft(3);
+  setRefillStatusMessage('Watching rewarded ad...');
+
+  try {
+    const res = await watchRewardedAdForChips({
+      onPreviewTick: (secs) => setAdSecondsLeft(secs)
+    });
+
+    if (res.granted && res.chips > 0) {
+      await applyGrantedChips(res.chips, 'Ad Video (+2,500 Chips)');
+      setRefillStatusMessage('+2,500 Play Chips granted!');
+    } else {
+      setRefillStatusMessage(
+        res.reason || 'Ad closed before reward completion—watch until reward finishes.'
+      );
     }
-
-    adInFlightRef.current = true;
-    setIsAdRunning(true);
-    setAdSecondsLeft(3);
-    setRefillStatusMessage('Watching rewarded ad...');
-
-    try {
-      const res = await watchRewardedAdForChips({
-        onPreviewTick: (secs) => setAdSecondsLeft(secs)
-      });
-
-      if (res.granted && res.chips > 0) {
-        const updatedAdHistory = adCooldown.nextHistory;
-        setProfile((prev) => ({ ...prev, adHistory: updatedAdHistory }));
-        updateUserProfileFields(guest.playerId, {
-          adHistory: updatedAdHistory
-        }).catch(() => {});
-        await applyGrantedChips(res.chips, 'Ad Video (+2,500 Chips)');
-        setRefillStatusMessage(
-          `+2,500 Play Chips granted! (${Math.max(0, adCooldown.adsRemaining - 1)}/7 ads left today)`
-        );
-      } else {
-        setRefillStatusMessage(
-          res.reason || 'Ad closed before reward completion—watch until reward finishes.'
-        );
-      }
-    } catch (err) {
-      setRefillStatusMessage(err?.message || 'Unable to verify ad reward.');
-    } finally {
-      adInFlightRef.current = false;
-      setIsAdRunning(false);
-      setAdSecondsLeft(0);
-    }
-  };
+  } catch (err) {
+    setRefillStatusMessage(err?.message || 'Unable to verify ad reward.');
+  } finally {
+    adInFlightRef.current = false;
+    setIsAdRunning(false);
+    setAdSecondsLeft(0);
+  }
+};
 
   const handleBuyPiChips = async (qty) => {
     if (isAdRunning || isPiPayBusy) return;
@@ -1074,7 +1060,6 @@ export default function App() {
           }
           isAdPreviewRunning={isAdRunning}
           adPreviewSecondsLeft={adSecondsLeft}
-          adCooldown={adCooldown}
           isPiPaymentBusy={isPiPayBusy}
           statusMessage={refillStatusMessage}
           onWatchVideoAd={handleWatchVideoAd}

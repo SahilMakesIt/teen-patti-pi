@@ -26,6 +26,10 @@ function getRtdb() {
   return getDatabase(app);
 }
 
+// 1x1 silent WAV to unlock a single persistent <audio> element on first user tap
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+
 export default function TableVoiceControls({
   roomId,
   userId,
@@ -42,25 +46,64 @@ export default function TableVoiceControls({
   const recorderRef = useRef(null);
   const loopTimerRef = useRef(null);
   const mutedRef = useRef(isVoiceMutedByListener);
-  const isTransmittingRef = useRef(false);
+  const handsFreeRef = useRef(false);
+  const holdingMicRef = useRef(false);
   const joinedAtRef = useRef(Date.now());
 
+  // Single persistent unlocked audio element + sequential playback queue
+  const playerElRef = useRef(null);
+  const clipQueueRef = useRef([]);
+  const isPlayingRef = useRef(false);
+
   const isTransmitting = isHandsFree || isHoldingMic;
-  isTransmittingRef.current = isTransmitting;
+  handsFreeRef.current = isHandsFree;
+  holdingMicRef.current = isHoldingMic;
 
   useEffect(() => {
     mutedRef.current = isVoiceMutedByListener;
+    if (playerElRef.current) {
+      playerElRef.current.muted = Boolean(isVoiceMutedByListener);
+    }
   }, [isVoiceMutedByListener]);
 
-  // Unlock Android WebView audio playback on any user tap
-  function unlockWebViewAudio() {
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
-        const ctx = new AudioCtx();
-        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
-      }
-    } catch (_e) {}
+  // Create and unlock ONE persistent <audio> element on any user tap
+  function unlockPlayer() {
+    if (!playerElRef.current) {
+      const el = document.createElement('audio');
+      el.playsInline = true;
+      el.autoplay = true;
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      playerElRef.current = el;
+    }
+    if (!isPlayingRef.current) {
+      playerElRef.current.src = SILENT_WAV;
+      playerElRef.current.play().catch(() => {});
+    }
+  }
+
+  function playNextInQueue() {
+    if (isPlayingRef.current) return;
+    const nextSrc = clipQueueRef.current.shift();
+    if (!nextSrc) return;
+
+    unlockPlayer();
+    const el = playerElRef.current;
+    if (!el) return;
+
+    isPlayingRef.current = true;
+    el.muted = Boolean(mutedRef.current);
+    el.volume = 1.0;
+    el.src = nextSrc;
+
+    const finish = () => {
+      isPlayingRef.current = false;
+      playNextInQueue();
+    };
+
+    el.onended = finish;
+    el.onerror = finish;
+    el.play().catch(finish);
   }
 
   async function ensureMicStream() {
@@ -93,36 +136,36 @@ export default function TableVoiceControls({
     recorderRef.current = null;
   }
 
-  // Record & send audio clip ONLY while Hold to Talk is held OR Hands-Free is checked
+  function sendClipToRoom(blob) {
+    if (!blob || blob.size < 300) return;
+    if (!roomId || roomId === 'local' || !userId) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64DataUrl = reader.result;
+      if (typeof base64DataUrl !== 'string') return;
+      const db = getRtdb();
+      const cleanRoom = String(roomId).trim().toUpperCase();
+      const clipsRef = ref(db, `voiceRooms/${cleanRoom}/clips`);
+      push(clipsRef, {
+        senderId: String(userId).trim(),
+        audio: base64DataUrl,
+        ts: Date.now(),
+      }).catch(() => {});
+    };
+    reader.readAsDataURL(blob);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
-    async function sendClipToRoom(blob) {
-      if (!blob || blob.size < 400) return;
-      if (!roomId || roomId === 'local' || !userId) return;
-
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64DataUrl = reader.result;
-        if (typeof base64DataUrl !== 'string') return;
-        const db = getRtdb();
-        const cleanRoom = String(roomId).trim().toUpperCase();
-        const clipsRef = ref(db, `voiceRooms/${cleanRoom}/clips`);
-        push(clipsRef, {
-          senderId: String(userId).trim(),
-          audio: base64DataUrl,
-          ts: Date.now(),
-        }).catch(() => {});
-      };
-      reader.readAsDataURL(blob);
-    }
-
-    async function startClipCycle() {
-      if (cancelled || !isTransmittingRef.current) return;
+    async function recordOneSlice() {
+      if (cancelled) return;
+      if (!handsFreeRef.current && !holdingMicRef.current) return;
 
       try {
         const stream = await ensureMicStream();
-        if (cancelled || !isTransmittingRef.current) return;
+        if (cancelled || (!handsFreeRef.current && !holdingMicRef.current)) return;
 
         const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
           ? 'audio/webm;codecs=opus'
@@ -140,29 +183,26 @@ export default function TableVoiceControls({
         recorderRef.current = recorder;
 
         recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) {
-            chunks.push(e.data);
-          }
+          if (e.data && e.data.size > 0) chunks.push(e.data);
         };
 
         recorder.onstop = () => {
           const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
           sendClipToRoom(blob);
-          // If Hands-Free is still checked, start the next 1.8s clip automatically
-          if (!cancelled && isTransmittingRef.current && isHandsFree) {
-            startClipCycle();
+          // Continuously loop new 1.2s slices as long as Hands-Free remains checked
+          if (!cancelled && handsFreeRef.current) {
+            recordOneSlice();
           }
         };
 
         recorder.start();
 
-        // In Hands-Free mode, slice every 1.8s so the other phone hears near-real-time speech
-        if (isHandsFree) {
+        if (handsFreeRef.current) {
           loopTimerRef.current = setTimeout(() => {
             if (recorder.state === 'recording') {
               recorder.stop();
             }
-          }, 1800);
+          }, 1200);
         }
       } catch (_err) {
         setMicError('Mic blocked');
@@ -173,9 +213,9 @@ export default function TableVoiceControls({
     }
 
     if (isTransmitting) {
-      unlockWebViewAudio();
+      unlockPlayer();
       onSpeakingChange?.(true);
-      startClipCycle();
+      recordOneSlice();
     } else {
       stopActiveRecording();
       onSpeakingChange?.(false);
@@ -185,9 +225,8 @@ export default function TableVoiceControls({
       cancelled = true;
       stopActiveRecording();
     };
-  }, [isTransmitting, isHandsFree, roomId, userId]);
+  }, [isTransmitting, roomId, userId]);
 
-  // Listen for incoming voice clips from other players at the table
   useEffect(() => {
     if (!roomId || roomId === 'local' || !userId) {
       setPeerCount(0);
@@ -218,18 +257,18 @@ export default function TableVoiceControls({
       if (clip.senderId === cleanUser) return;
       if (clip.ts && clip.ts < joinedAtRef.current - 3000) return;
 
-      // Auto-clean played clip from RTDB after 5 seconds
       setTimeout(() => {
         remove(snap.ref).catch(() => {});
-      }, 5000);
+      }, 6000);
 
       if (mutedRef.current) return;
 
-      try {
-        const audio = new Audio(clip.audio);
-        audio.volume = 1.0;
-        audio.play().catch(() => {});
-      } catch (_e) {}
+      // Prevent backlog delay if more than 3 clips pile up
+      if (clipQueueRef.current.length > 3) {
+        clipQueueRef.current.shift();
+      }
+      clipQueueRef.current.push(clip.audio);
+      playNextInQueue();
     });
 
     return () => {
@@ -245,6 +284,10 @@ export default function TableVoiceControls({
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((t) => t.stop());
         streamRef.current = null;
+      }
+      if (playerElRef.current) {
+        playerElRef.current.remove();
+        playerElRef.current = null;
       }
     };
   }, []);
@@ -267,7 +310,7 @@ export default function TableVoiceControls({
         disabled={isHandsFree}
         onMouseDown={() => {
           if (!isHandsFree) {
-            unlockWebViewAudio();
+            unlockPlayer();
             setIsHoldingMic(true);
           }
         }}
@@ -276,7 +319,7 @@ export default function TableVoiceControls({
         onTouchStart={(e) => {
           if (!isHandsFree) {
             e.preventDefault();
-            unlockWebViewAudio();
+            unlockPlayer();
             setIsHoldingMic(true);
           }
         }}
@@ -312,7 +355,7 @@ export default function TableVoiceControls({
           type="checkbox"
           checked={isHandsFree}
           onChange={(e) => {
-            unlockWebViewAudio();
+            unlockPlayer();
             setIsHandsFree(e.target.checked);
             if (e.target.checked) setIsHoldingMic(false);
           }}
@@ -323,7 +366,7 @@ export default function TableVoiceControls({
       <button
         type="button"
         onClick={() => {
-          unlockWebViewAudio();
+          unlockPlayer();
           onToggleListenerMute();
         }}
         title="Mute or unmute table voice without affecting game sounds"

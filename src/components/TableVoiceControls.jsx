@@ -115,14 +115,22 @@ export default function TableVoiceControls({
           stream.getAudioTracks().forEach((t) => {
             t.enabled = true;
           });
-          Object.values(peersRef.current).forEach((pc) => {
+
+          // Attach local mic track to every peer and trigger renegotiation
+          for (const pc of Object.values(peersRef.current)) {
             const senders = pc.getSenders();
+            let addedNew = false;
             stream.getAudioTracks().forEach((track) => {
               if (!senders.some((s) => s.track === track)) {
                 pc.addTrack(track, stream);
+                addedNew = true;
               }
             });
-          });
+            if (addedNew && typeof pc._renegotiate === 'function') {
+              await pc._renegotiate().catch(() => {});
+            }
+          }
+
           onSpeakingChange?.(true);
         } catch (_err) {
           setMicError('Mic blocked');
@@ -158,7 +166,7 @@ export default function TableVoiceControls({
     const myPresenceRef = ref(db, `voiceRooms/${cleanRoom}/peers/${cleanUser}`);
     const peersListRef = ref(db, `voiceRooms/${cleanRoom}/peers`);
 
-    setVoiceStatus('Connecting');
+    setVoiceStatus('Waiting');
     set(myPresenceRef, { joinedAt: Date.now() }).catch(() => {});
     onDisconnect(myPresenceRef).remove().catch(() => {});
 
@@ -195,6 +203,7 @@ export default function TableVoiceControls({
     async function setupPeerConnection(remoteId) {
       if (peersRef.current[remoteId]) return peersRef.current[remoteId];
 
+      setVoiceStatus('Connecting');
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peersRef.current[remoteId] = pc;
       pc.addTransceiver('audio', { direction: 'sendrecv' });
@@ -213,14 +222,17 @@ export default function TableVoiceControls({
         }
       };
 
-      pc.oniceconnectionstatechange = () => {
-        const state = pc.iceConnectionState;
-        if (state === 'connected' || state === 'completed') {
+      const updateState = () => {
+        const ice = pc.iceConnectionState;
+        const conn = pc.connectionState;
+        if (ice === 'connected' || ice === 'completed' || conn === 'connected') {
           setVoiceStatus('Live');
-        } else if (state === 'checking') {
+        } else if (ice === 'checking' || conn === 'connecting') {
           setVoiceStatus('Connecting');
         }
       };
+      pc.oniceconnectionstatechange = updateState;
+      pc.onconnectionstatechange = updateState;
 
       const pairId = [cleanUser, remoteId].sort().join('__');
       const isOfferer = cleanUser < remoteId;
@@ -242,6 +254,8 @@ export default function TableVoiceControls({
       };
 
       const pendingCandidates = [];
+      let lastOfferSdp = '';
+      let lastAnswerSdp = '';
 
       const unsubCandidates = onChildAdded(remoteCandidatesRef, async (snap) => {
         const cand = snap.val();
@@ -256,37 +270,51 @@ export default function TableVoiceControls({
       });
       unsubscribers.push(unsubCandidates);
 
-      if (isOfferer) {
+      // Allows late mic tracks to renegotiate SDP offer/answer
+      pc._renegotiate = async () => {
+        if (pc.signalingState !== 'stable') return;
         const offer = await pc.createOffer({ offerToReceiveAudio: true });
         await pc.setLocalDescription(offer);
-        await set(offerRef, { type: offer.type, sdp: offer.sdp });
+        await set(offerRef, { type: offer.type, sdp: offer.sdp, ts: Date.now() });
+      };
 
-        const unsubAnswer = onValue(answerRef, async (snap) => {
-          const ans = snap.val();
-          if (ans && !pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription(ans));
-            while (pendingCandidates.length > 0) {
-              const c = pendingCandidates.shift();
-              await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-            }
+      // Listen for answers (for both initial offer and mid-call mic renegotiation)
+      const unsubAnswer = onValue(answerRef, async (snap) => {
+        const ans = snap.val();
+        if (ans && ans.sdp && ans.sdp !== lastAnswerSdp && pc.signalingState === 'have-local-offer') {
+          lastAnswerSdp = ans.sdp;
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: ans.type, sdp: ans.sdp }));
+          while (pendingCandidates.length > 0) {
+            const c = pendingCandidates.shift();
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
           }
-        });
-        unsubscribers.push(unsubAnswer);
-      } else {
-        const unsubOffer = onValue(offerRef, async (snap) => {
-          const off = snap.val();
-          if (off && !pc.currentRemoteDescription) {
-            await pc.setRemoteDescription(new RTCSessionDescription(off));
-            while (pendingCandidates.length > 0) {
-              const c = pendingCandidates.shift();
-              await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
-            }
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            await set(answerRef, { type: answer.type, sdp: answer.sdp });
+        }
+      });
+      unsubscribers.push(unsubAnswer);
+
+      // Listen for offers (both initial offer from offerer and mid-call renegotiation from either side)
+      const unsubOffer = onValue(offerRef, async (snap) => {
+        const off = snap.val();
+        if (off && off.sdp && off.sdp !== lastOfferSdp) {
+          if (isOfferer && !pc.currentRemoteDescription) return;
+          lastOfferSdp = off.sdp;
+          await pc.setRemoteDescription(new RTCSessionDescription({ type: off.type, sdp: off.sdp }));
+          while (pendingCandidates.length > 0) {
+            const c = pendingCandidates.shift();
+            await pc.addIceCandidate(new RTCIceCandidate(c)).catch(() => {});
           }
-        });
-        unsubscribers.push(unsubOffer);
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          await set(answerRef, { type: answer.type, sdp: answer.sdp, ts: Date.now() });
+        }
+      });
+      unsubscribers.push(unsubOffer);
+
+      if (isOfferer) {
+        await remove(ref(db, `voiceRooms/${cleanRoom}/signals/${pairId}`)).catch(() => {});
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        await set(offerRef, { type: offer.type, sdp: offer.sdp, ts: Date.now() });
       }
 
       return pc;
@@ -295,6 +323,10 @@ export default function TableVoiceControls({
     const unsubPeers = onValue(peersListRef, (snap) => {
       const peersData = snap.val() || {};
       const activeIds = Object.keys(peersData).filter((id) => id !== cleanUser);
+
+      if (activeIds.length === 0) {
+        setVoiceStatus('Waiting');
+      }
 
       activeIds.forEach((remoteId) => {
         setupPeerConnection(remoteId).catch(() => {});
@@ -410,6 +442,9 @@ export default function TableVoiceControls({
 
       {voiceStatus === 'Live' && (
         <span style={{ color: '#4ade80', fontSize: '11px', fontWeight: 700 }}>● Voice Live</span>
+      )}
+      {voiceStatus === 'Connecting' && (
+        <span style={{ color: '#facc15', fontSize: '11px', fontWeight: 600 }}>● Connecting...</span>
       )}
 
       {micError && (

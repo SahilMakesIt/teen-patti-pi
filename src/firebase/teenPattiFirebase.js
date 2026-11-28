@@ -6,6 +6,7 @@ import {
   getDoc,
   getDocs,
   getFirestore,
+  increment,
   limit,
   onSnapshot,
   query,
@@ -56,6 +57,8 @@ export async function ensureUserProfile(playerId, displayName) {
       chipsBalance: STARTING_CHIPS,
       handsPlayed: 0,
       handsWon: 0,
+      totalGiftsSent: 0,
+      totalGiftsReceived: 0,
       soundEnabled: true,
       hideBalance: false,
       adHistory: [],
@@ -78,7 +81,7 @@ export function observeUserProfile(playerId, onProfile, onError) {
   );
 }
 
-export async function updateUserProfileFields(playerId, fields) {
+export async function updateUserProfileFields(playerId, fields, adminEvent = null) {
   const docRef = doc(db, 'users', playerId);
   const updates = { updatedAt: serverTimestamp() };
   if (fields.pioneerName !== undefined) {
@@ -107,6 +110,8 @@ export async function updateUserProfileFields(playerId, fields) {
         chipsBalance: updates.chipsBalance ?? STARTING_CHIPS,
         handsPlayed: updates.handsPlayed ?? 0,
         handsWon: updates.handsWon ?? 0,
+        totalGiftsSent: 0,
+        totalGiftsReceived: 0,
         soundEnabled: updates.soundEnabled ?? true,
         hideBalance: updates.hideBalance ?? false,
         adHistory: updates.adHistory ?? [],
@@ -116,6 +121,16 @@ export async function updateUserProfileFields(playerId, fields) {
     } else {
       throw err;
     }
+  }
+
+  if (adminEvent) {
+    await setDoc(doc(collection(db, 'admin_logs')), {
+      userId: playerId,
+      ...adminEvent,
+      chipsBalanceAfter: updates.chipsBalance ?? null,
+      createdAtMs: Date.now(),
+      createdAt: serverTimestamp()
+    });
   }
 }
 
@@ -370,14 +385,17 @@ export async function closeOnlineRoom(roomCode) {
   });
 }
 
+const MAX_DAILY_GIFT_CHIPS = 50000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
   const cleanRecipient = String(recipientInput || '').trim().replace(/^@/, '');
   const amount = Math.floor(Number(rawAmount));
 
   if (!senderUid) throw new Error('Player session not ready.');
   if (!cleanRecipient) throw new Error("Enter your friend's Pi username or Player ID.");
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new Error('Enter a valid chip amount greater than 0.');
+  if (!Number.isFinite(amount) || amount < 100 || amount > MAX_DAILY_GIFT_CHIPS) {
+    throw new Error('Gift amount must be between 100 and 50,000 chips.');
   }
 
   let recipientUid = null;
@@ -407,8 +425,44 @@ export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
     throw new Error('You cannot send chips to your own account.');
   }
 
+  const cutoffMs = Date.now() - DAY_MS;
+
+  // 1. Check sender's rolling 24-hour sent limit (max 50,000)
+  const sentSnap = await getDocs(
+    query(collection(db, 'gift_transfers'), where('senderUid', '==', senderUid))
+  );
+  const sentLast24h = sentSnap.docs.reduce((sum, d) => {
+    const data = d.data();
+    return (data.createdAtMs || 0) >= cutoffMs ? sum + Number(data.amount || 0) : sum;
+  }, 0);
+
+  if (sentLast24h + amount > MAX_DAILY_GIFT_CHIPS) {
+    const remainingSend = Math.max(0, MAX_DAILY_GIFT_CHIPS - sentLast24h);
+    throw new Error(
+      `24h send limit (50,000) reached. You can send ${remainingSend.toLocaleString('en-US')} more chips right now.`
+    );
+  }
+
+  // 2. Check recipient's rolling 24-hour received limit (max 50,000)
+  const receivedSnap = await getDocs(
+    query(collection(db, 'gift_transfers'), where('recipientUid', '==', recipientUid))
+  );
+  const receivedLast24h = receivedSnap.docs.reduce((sum, d) => {
+    const data = d.data();
+    return (data.createdAtMs || 0) >= cutoffMs ? sum + Number(data.amount || 0) : sum;
+  }, 0);
+
+  if (receivedLast24h + amount > MAX_DAILY_GIFT_CHIPS) {
+    const remainingReceive = Math.max(0, MAX_DAILY_GIFT_CHIPS - receivedLast24h);
+    throw new Error(
+      `${recipientName} can only receive ${remainingReceive.toLocaleString('en-US')} more chips in the next 24h.`
+    );
+  }
+
   const senderRef = doc(db, 'users', senderUid);
   const recipientRef = doc(db, 'users', recipientUid);
+  const transferRef = doc(collection(db, 'gift_transfers'));
+  const adminLogRef = doc(collection(db, 'admin_logs'));
 
   const newSenderBalance = await runTransaction(db, async (tx) => {
     const senderSnap = await tx.get(senderRef);
@@ -417,8 +471,10 @@ export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
     if (!senderSnap.exists()) throw new Error('Sender profile not found.');
     if (!recipientSnap.exists()) throw new Error('Friend profile not found.');
 
-    const senderChips = Number(senderSnap.data().chipsBalance || 0);
-    const recipientChips = Number(recipientSnap.data().chipsBalance || 0);
+    const senderData = senderSnap.data();
+    const recipientData = recipientSnap.data();
+    const senderChips = Number(senderData.chipsBalance || 0);
+    const recipientChips = Number(recipientData.chipsBalance || 0);
 
     if (senderChips < amount) {
       throw new Error(`Insufficient chips. You have ${senderChips.toLocaleString('en-US')}.`);
@@ -426,14 +482,42 @@ export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
 
     const updatedSender = senderChips - amount;
     const updatedRecipient = recipientChips + amount;
+    const nowMs = Date.now();
 
     tx.update(senderRef, {
       chipsBalance: updatedSender,
+      totalGiftsSent: increment(amount),
       updatedAt: serverTimestamp()
     });
+
     tx.update(recipientRef, {
       chipsBalance: updatedRecipient,
+      totalGiftsReceived: increment(amount),
       updatedAt: serverTimestamp()
+    });
+
+    tx.set(transferRef, {
+      senderUid,
+      senderName: senderData.pioneerName || senderUid,
+      recipientUid,
+      recipientName,
+      amount,
+      status: 'completed',
+      createdAtMs: nowMs,
+      createdAt: serverTimestamp()
+    });
+
+    tx.set(adminLogRef, {
+      type: 'GIFT_TRANSFER',
+      senderUid,
+      senderName: senderData.pioneerName || senderUid,
+      recipientUid,
+      recipientName,
+      amount,
+      senderBalanceAfter: updatedSender,
+      recipientBalanceAfter: updatedRecipient,
+      createdAtMs: nowMs,
+      createdAt: serverTimestamp()
     });
 
     return updatedSender;

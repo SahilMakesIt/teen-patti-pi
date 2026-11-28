@@ -60,9 +60,9 @@ const VIDEO_REWARD_CHIPS = 2000;
 
 export function formatVisiblePiUsername(rawName) {
   const clean = String(rawName || '').trim().replace(/^@/, '');
-  if (!clean) return 'PiUser';
+  if (!clean) return 'PiUse****';
   if (clean.length <= 5) return clean;
-  return `${clean.slice(0, 5)}***`;
+  return `${clean.slice(0, 5)}****`;
 }
 
 function generateSixDigitInviteCode() {
@@ -82,8 +82,8 @@ function mapRoomAndSeatsToTable(room, seats, fallbackMode) {
   const mappedSeats = (seats || []).map((doc) => ({
     id: doc.userId,
     seatIndex: Number(doc.seatIndex || 0),
-    name: formatVisiblePiUsername(doc.displayName || 'PiUser'),
-    fullName: doc.displayName || 'PiUser',
+    name: formatVisiblePiUsername(doc.displayName || doc.username || 'PiUser'),
+    fullName: doc.displayName || doc.username || 'PiUser',
     isBot: false,
     chips: Number(doc.chips || 0),
     cards: (doc.cards || []).map(decodeCardCode).filter(Boolean),
@@ -149,10 +149,9 @@ export default function App() {
   const guest = useRef(getOrCreateGuestIdentity()).current;
 
   const [screen, setScreen] = useState('LOBBY');
-  const [authChecked, setAuthChecked] = useState(false);
   const [profile, setProfile] = useState({
     playerId: guest.playerId,
-    pioneerName: '',
+    pioneerName: guest.username || 'PiUser',
     isPiVerified: false,
     chipsBalance: STARTING_CHIPS,
     handsPlayed: 0,
@@ -161,7 +160,7 @@ export default function App() {
     hideBalance: false,
     adHistory: [],
   });
-  const [piStatusMessage, setPiStatusMessage] = useState('Connecting to Pi Browser...');
+  const [piStatusMessage, setPiStatusMessage] = useState(guest.environmentLabel || 'Pi Wallet Not Connected');
   const [isPiConnecting, setIsPiConnecting] = useState(false);
 
   const [selectedMode, setSelectedMode] = useState(GAME_MODES.VS_AUTO_BOT);
@@ -176,6 +175,7 @@ export default function App() {
   const [turnTimerProgress, setTurnTimerProgress] = useState(1);
 
   const [isRulesOpen, setIsRulesOpen] = useState(false);
+  const [showWalletInfoBanner, setShowWalletInfoBanner] = useState(false);
   const [isRefillOpen, setIsRefillOpen] = useState(false);
   const [refillTargetId, setRefillTargetId] = useState(null);
   const [isAdRunning, setIsAdRunning] = useState(false);
@@ -192,94 +192,106 @@ export default function App() {
   const latestRoomRef = useRef(null);
   const latestSeatsRef = useRef([]);
 
+  const syncVerifiedPiUser = async (piResult) => {
+    const cleanName = String(piResult?.username || '').trim().replace(/^@/, '');
+    if (!piResult?.isPiAuthenticated || !cleanName) {
+      return false;
+    }
+
+    const stableId = piResult.uid || profile.playerId || guest.playerId;
+    const isFounder =
+      cleanName.toLowerCase() === FOUNDER_PI_USERNAME.toLowerCase() ||
+      stableId === FOUNDER_PLAYER_ID;
+
+    try {
+      await ensureUserProfile(stableId, cleanName);
+    } catch (_err) {
+      // Offline fallback
+    }
+
+    setProfile((prev) => ({
+      ...prev,
+      playerId: stableId,
+      pioneerName: cleanName,
+      isPiVerified: true,
+      chipsBalance: isFounder ? Math.max(prev.chipsBalance, FOUNDER_DEFAULT_CHIPS) : prev.chipsBalance,
+    }));
+    setPiStatusMessage(piResult.environmentLabel || 'Pi Wallet Connected');
+    setCloudMessage(null);
+
+    updateUserProfileFields(stableId, {
+      pioneerName: cleanName,
+      username: cleanName,
+      usernameLocked: true,
+      piVerified: true,
+    }).catch(() => {});
+
+    return true;
+  };
+
   useEffect(() => {
     let unsubProfile = null;
     let active = true;
 
     (async () => {
-      setIsPiConnecting(true);
-      const piResult = await authenticateWithPi();
-      if (!active) return;
-
-      if (!piResult.isPiAuthenticated || !piResult.username) {
-        setIsPiConnecting(false);
-        setAuthChecked(true);
-        setPiStatusMessage('Please open this app inside Pi Browser to sign in.');
-        return;
-      }
-
-      const verifiedUsername = String(piResult.username).trim().replace(/^@/, '');
-      const stableId = piResult.uid || guest.playerId;
-      const isFounder =
-        verifiedUsername.toLowerCase() === FOUNDER_PI_USERNAME.toLowerCase() ||
-        stableId === FOUNDER_PLAYER_ID;
-
       try {
-        await ensureUserProfile(stableId, verifiedUsername);
+        await ensureUserProfile(guest.playerId, guest.username || 'PiUser');
       } catch (_err) {
         // Offline fallback
       }
 
-      setProfile((prev) => ({
-        ...prev,
-        playerId: stableId,
-        pioneerName: verifiedUsername,
-        isPiVerified: true,
-        chipsBalance: isFounder ? Math.max(prev.chipsBalance, FOUNDER_DEFAULT_CHIPS) : prev.chipsBalance,
-      }));
-      setPiStatusMessage(piResult.environmentLabel || 'Pi Browser Verified');
-      setIsPiConnecting(false);
-      setAuthChecked(true);
-
-      updateUserProfileFields(stableId, {
-        pioneerName: verifiedUsername,
-        username: verifiedUsername,
-        usernameLocked: true,
-        piVerified: true,
-      }).catch(() => {});
-
       unsubProfile = observeUserProfile(
-        stableId,
+        guest.playerId,
         (doc) => {
           if (!active || !doc) return;
+          const storedName = String(doc.username || doc.pioneerName || guest.username || 'PiUser').trim();
+          const isFounder =
+            storedName.toLowerCase() === FOUNDER_PI_USERNAME.toLowerCase() ||
+            guest.playerId === FOUNDER_PLAYER_ID;
           const rawChips = Number(doc.chipsBalance ?? STARTING_CHIPS);
           const effectiveChips =
             isFounder && rawChips < FOUNDER_DEFAULT_CHIPS ? FOUNDER_DEFAULT_CHIPS : rawChips;
 
           if (isFounder && rawChips < FOUNDER_DEFAULT_CHIPS) {
-            updateUserProfileFields(stableId, {
+            updateUserProfileFields(guest.playerId, {
               chipsBalance: FOUNDER_DEFAULT_CHIPS,
-              pioneerName: verifiedUsername,
-              username: verifiedUsername,
-              usernameLocked: true,
             }).catch(() => {});
           }
 
           soundEffects.enabled = doc.soundEnabled !== false;
-          setProfile({
-            playerId: stableId,
-            pioneerName: verifiedUsername,
-            isPiVerified: true,
+          setProfile((prev) => ({
+            ...prev,
+            playerId: guest.playerId,
+            pioneerName: prev.isPiVerified ? prev.pioneerName : storedName,
             chipsBalance: effectiveChips,
             handsPlayed: Number(doc.handsPlayed || 0),
             handsWon: Number(doc.handsWon || 0),
             soundEnabled: doc.soundEnabled !== false,
             hideBalance: Boolean(doc.hideBalance),
             adHistory: Array.isArray(doc.adHistory) ? doc.adHistory : [],
-          });
+          }));
         },
         () => {}
       );
+
+      try {
+        const piResult = await authenticateWithPi();
+        if (active && piResult?.isPiAuthenticated && piResult?.username) {
+          await syncVerifiedPiUser(piResult);
+        }
+      } catch (_err) {
+        // Do not block lobby if Pi auth fails on initial load; user can tap Connect Pi Wallet
+      }
     })();
 
     return () => {
       active = false;
       if (unsubProfile) unsubProfile();
     };
-  }, [guest.playerId]);
+  }, [guest.playerId, guest.username]);
 
   useEffect(() => {
-    if (authChecked && profile.isPiVerified && screen === 'LOBBY' && profile.chipsBalance < LOW_CHIPS_THRESHOLD) {
+    if (screen === 'LOBBY' && profile.chipsBalance < LOW_CHIPS_THRESHOLD) {
       const key = `lobby_${profile.chipsBalance}`;
       if (lowPromptKeyRef.current !== key) {
         lowPromptKeyRef.current = key;
@@ -288,7 +300,7 @@ export default function App() {
         setIsRefillOpen(true);
       }
     }
-  }, [authChecked, profile.isPiVerified, screen, profile.chipsBalance]);
+  }, [screen, profile.chipsBalance]);
 
   const stopObservingOnlineRoom = () => {
     if (onlineRoomUnsubRef.current) {
@@ -526,28 +538,22 @@ export default function App() {
   const handleConnectPiWallet = async () => {
     if (isPiConnecting) return;
     setIsPiConnecting(true);
-    const result = await authenticateWithPi();
-    if (result.isPiAuthenticated && result.username) {
-      const cleanName = String(result.username).trim().replace(/^@/, '');
-      const stableId = result.uid || profile.playerId;
-      setProfile((prev) => ({
-        ...prev,
-        playerId: stableId,
-        pioneerName: cleanName,
-        isPiVerified: true
-      }));
-      setPiStatusMessage(result.environmentLabel || 'Pi Browser Verified');
-      setAuthChecked(true);
-      updateUserProfileFields(stableId, {
-        pioneerName: cleanName,
-        username: cleanName,
-        usernameLocked: true,
-        piVerified: true
-      }).catch(() => {});
-    } else {
-      setPiStatusMessage('Open inside Pi Browser and sign in with your Pi account.');
+    setCloudMessage(null);
+    try {
+      const result = await authenticateWithPi();
+      const connected = await syncVerifiedPiUser(result);
+      if (!connected) {
+        const msg = result?.errorMessage || result?.reason || 'Pi Wallet request failed. Open in Pi Browser and try again.';
+        setPiStatusMessage(msg);
+        setCloudMessage(msg);
+      }
+    } catch (err) {
+      const msg = err?.message || 'Pi Wallet request failed.';
+      setPiStatusMessage(msg);
+      setCloudMessage(msg);
+    } finally {
+      setIsPiConnecting(false);
     }
-    setIsPiConnecting(false);
   };
 
   const applyGrantedChips = async (amount, label) => {
@@ -792,30 +798,6 @@ export default function App() {
     triggerDealAnim();
   };
 
-  if (!authChecked || !profile.isPiVerified) {
-    return (
-      <div className="app-shell" style={{ padding: 24, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 14 }}>
-        <h1 className="brand-title" style={{ marginBottom: 4 }}>TEEN PATTI</h1>
-        <p className="hero-sub" style={{ marginBottom: 8 }}>
-          {isPiConnecting
-            ? 'Verifying your Pi Browser account...'
-            : 'Pi Browser sign-in is required. Your Pi username is permanently linked and masked to the first 5 characters at tables.'}
-        </p>
-        <button
-          type="button"
-          className="primary-cta"
-          disabled={isPiConnecting}
-          onClick={handleConnectPiWallet}
-          style={{ width: '100%' }}
-        >
-          <Wallet size={18} />
-          {isPiConnecting ? 'Connecting Pi Account...' : 'Sign In with Pi Browser'}
-        </button>
-        {piStatusMessage && <div className="hero-sub">{piStatusMessage}</div>}
-      </div>
-    );
-  }
-
   const visibleUsername = formatVisiblePiUsername(profile.pioneerName);
   const isAutoBot = selectedMode.id === GAME_MODES.VS_AUTO_BOT.id;
 
@@ -842,11 +824,25 @@ export default function App() {
             </div>
 
             <div className="wallet-actions-row">
-              <div className="pi-pill connected" style={{ cursor: 'default' }}>
-                <span className="dot-live" />
-                <CheckCircle2 size={15} />
-                <span className="pi-pill-text">Pi Verified • @{visibleUsername}</span>
-              </div>
+              {profile.isPiVerified ? (
+                <div className="pi-pill connected" style={{ cursor: 'default' }}>
+                  <span className="dot-live" />
+                  <CheckCircle2 size={15} />
+                  <span className="pi-pill-text">Pi Wallet Connected • @{visibleUsername}</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="pi-pill"
+                  disabled={isPiConnecting}
+                  onClick={handleConnectPiWallet}
+                >
+                  <Wallet size={15} color="#8B5CF6" />
+                  <span className="pi-pill-text">
+                    {isPiConnecting ? 'Connecting Pi Wallet...' : 'Connect Pi Wallet'}
+                  </span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -863,14 +859,24 @@ export default function App() {
 
             {cloudMessage && <div className="error-banner">{cloudMessage}</div>}
 
+            {showWalletInfoBanner && (
+              <div className="notice-box" style={{ marginBottom: 10 }}>
+                @{visibleUsername} • {profile.isPiVerified ? 'Pi Wallet Connected (Locked)' : piStatusMessage}
+              </div>
+            )}
+
             <div className="hero-banner">
               <div>
                 <div className="hero-kicker">CLASSIC 3-CARD TEEN PATTI</div>
                 <div className="hero-sub">Play Chips have zero monetary value. Entertainment only.</div>
               </div>
-              <div className="profile-chip-btn" style={{ cursor: 'default' }}>
+              <button
+                type="button"
+                className="profile-chip-btn"
+                onClick={() => setShowWalletInfoBanner((prev) => !prev)}
+              >
                 @{visibleUsername}
-              </div>
+              </button>
             </div>
 
             <div className="balance-card">

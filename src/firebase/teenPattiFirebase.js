@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 import {
   collection,
@@ -33,9 +34,25 @@ const firebaseConfig = {
 export const FIRESTORE_DATABASE_ID = 'ai-studio-android-teenpatt-40f016a0-2258-4001-a4b3-a545bea9020f';
 
 const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
 const db = getFirestore(app, FIRESTORE_DATABASE_ID);
 
+let authReadyPromise = null;
+export function ensureFirebaseAuth() {
+  if (auth.currentUser) return Promise.resolve(auth.currentUser);
+  if (!authReadyPromise) {
+    authReadyPromise = signInAnonymously(auth)
+      .then((cred) => cred.user)
+      .catch((err) => {
+        authReadyPromise = null;
+        throw err;
+      });
+  }
+  return authReadyPromise;
+}
+
 if (typeof window !== 'undefined') {
+  ensureFirebaseAuth().catch(() => {});
   isAnalyticsSupported()
     .then((ok) => {
       if (ok) getAnalytics(app);
@@ -44,6 +61,7 @@ if (typeof window !== 'undefined') {
 }
 
 export async function ensureUserProfile(playerId, displayName) {
+  await ensureFirebaseAuth();
   const docRef = doc(db, 'users', playerId);
   const snap = await getDoc(docRef);
   if (!snap.exists()) {
@@ -69,19 +87,33 @@ export async function ensureUserProfile(playerId, displayName) {
 }
 
 export function observeUserProfile(playerId, onProfile, onError) {
-  const docRef = doc(db, 'users', playerId);
-  return onSnapshot(
-    docRef,
-    (snap) => {
-      onProfile(snap.exists() ? snap.data() : null);
-    },
-    (err) => {
+  let unsubscribe = () => {};
+  let cancelled = false;
+  ensureFirebaseAuth()
+    .then(() => {
+      if (cancelled) return;
+      const docRef = doc(db, 'users', playerId);
+      unsubscribe = onSnapshot(
+        docRef,
+        (snap) => {
+          onProfile(snap.exists() ? snap.data() : null);
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    })
+    .catch((err) => {
       if (onError) onError(err);
-    }
-  );
+    });
+  return () => {
+    cancelled = true;
+    unsubscribe();
+  };
 }
 
 export async function updateUserProfileFields(playerId, fields, adminEvent = null) {
+  await ensureFirebaseAuth();
   const docRef = doc(db, 'users', playerId);
   const updates = { updatedAt: serverTimestamp() };
   if (fields.pioneerName !== undefined) {
@@ -144,6 +176,7 @@ export async function createOnlineRoom({
   piVerified,
   isPublic
 }) {
+  await ensureFirebaseAuth();
   const normalizedCode = roomCode.trim().toUpperCase();
   const safeBoot = [50, 100, 200].includes(bootAmount) ? bootAmount : 100;
   const safeMax = Math.max(2, Math.min(5, maxPlayers));
@@ -198,6 +231,7 @@ export async function joinOnlineRoom({
   playerChips,
   piVerified
 }) {
+  await ensureFirebaseAuth();
   const normalizedCode = roomCode.trim().toUpperCase();
   if (!/^[A-Z0-9]{4,12}$/.test(normalizedCode)) {
     throw new Error('Enter a valid 6-digit invite code.');
@@ -274,6 +308,7 @@ export async function findOrCreatePublicRoom({
   piVerified,
   fallbackRoomCode
 }) {
+  await ensureFirebaseAuth();
   const safeBoot = [50, 100, 200].includes(bootAmount) ? bootAmount : 100;
   const safeMax = Math.max(2, Math.min(5, maxPlayers));
 
@@ -322,38 +357,65 @@ export async function findOrCreatePublicRoom({
 
 export function observeRoom(roomCode, onRoom, onError) {
   const normalizedCode = roomCode.trim().toUpperCase();
-  return onSnapshot(
-    doc(db, 'rooms', normalizedCode),
-    (snap) => {
-      onRoom(snap.exists() ? snap.data() : null);
-    },
-    (err) => {
+  let unsubscribe = () => {};
+  let cancelled = false;
+  ensureFirebaseAuth()
+    .then(() => {
+      if (cancelled) return;
+      unsubscribe = onSnapshot(
+        doc(db, 'rooms', normalizedCode),
+        (snap) => {
+          onRoom(snap.exists() ? snap.data() : null);
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    })
+    .catch((err) => {
       if (onError) onError(err);
-    }
-  );
+    });
+  return () => {
+    cancelled = true;
+    unsubscribe();
+  };
 }
 
 export function observeRoomSeats(playerId, roomCode, onSeats, onError) {
   const normalizedCode = roomCode.trim().toUpperCase();
-  const q = query(
-    collection(db, 'rooms', normalizedCode, 'seats'),
-    where('memberUids', 'array-contains', playerId)
-  );
-  return onSnapshot(
-    q,
-    (snap) => {
-      const seats = snap.docs
-        .map((d) => d.data())
-        .sort((a, b) => (a.seatIndex || 0) - (b.seatIndex || 0));
-      onSeats(seats);
-    },
-    (err) => {
+  let unsubscribe = () => {};
+  let cancelled = false;
+  ensureFirebaseAuth()
+    .then(() => {
+      if (cancelled) return;
+      const q = query(
+        collection(db, 'rooms', normalizedCode, 'seats'),
+        where('memberUids', 'array-contains', playerId)
+      );
+      unsubscribe = onSnapshot(
+        q,
+        (snap) => {
+          const seats = snap.docs
+            .map((d) => d.data())
+            .sort((a, b) => (a.seatIndex || 0) - (b.seatIndex || 0));
+          onSeats(seats);
+        },
+        (err) => {
+          if (onError) onError(err);
+        }
+      );
+    })
+    .catch((err) => {
       if (onError) onError(err);
-    }
-  );
+    });
+  return () => {
+    cancelled = true;
+    unsubscribe();
+  };
 }
 
 export async function syncRoomAndSeats(roomCode, roomUpdates, seatUpdatesByUid) {
+  await ensureFirebaseAuth();
   const normalizedCode = roomCode.trim().toUpperCase();
   const roomRef = doc(db, 'rooms', normalizedCode);
   const batch = writeBatch(db);
@@ -376,6 +438,7 @@ export async function syncRoomAndSeats(roomCode, roomUpdates, seatUpdatesByUid) 
 }
 
 export async function closeOnlineRoom(roomCode) {
+  await ensureFirebaseAuth();
   const normalizedCode = roomCode.trim().toUpperCase();
   await updateDoc(doc(db, 'rooms', normalizedCode), {
     status: 'finished',
@@ -389,6 +452,7 @@ const MAX_DAILY_GIFT_CHIPS = 50000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export async function giftChipsToFriend(senderUid, recipientInput, rawAmount) {
+  await ensureFirebaseAuth();
   const cleanRecipient = String(recipientInput || '').trim().replace(/^@/, '');
   const amount = Math.floor(Number(rawAmount));
 

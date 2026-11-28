@@ -66,16 +66,19 @@ export async function authenticateWithPi() {
     return guest;
   }
 
-  try {
+ try {
     if (typeof window.Pi.init === 'function') {
       window.Pi.init({ version: '2.0', sandbox: false });
     }
     const authResult = await window.Pi.authenticate(
-      ['username', 'payments'],
+      ['username'],
       onIncompletePaymentFound
     );
     const user = authResult?.user || {};
     const username = user.username || guest.username;
+    const cleanName = String(username || '').trim().replace(/^@/, '');
+    const visibleName =
+      cleanName.length <= 5 ? cleanName : `${cleanName.slice(0, 5)}****`;
     try {
       if (user.username) {
         window.localStorage.setItem(STORAGE_PIONEER_NAME_KEY, user.username);
@@ -88,14 +91,16 @@ export async function authenticateWithPi() {
       uid: user.uid || guest.playerId,
       isPiAuthenticated: Boolean(user.username),
       environmentLabel: user.username
-        ? `Pi Wallet Connected (@${username})`
+        ? `Pi Wallet Connected (@${visibleName})`
         : guest.environmentLabel
     };
-  } catch (_err) {
-    return guest;
+  } catch (err) {
+    return {
+      ...guest,
+      errorMessage: err?.message || 'Pi authentication failed'
+    };
   }
 }
-
 export async function verifyAndGrantAdReward(adId) {
   const resp = await fetch('/api/pi/ads/verify', {
     method: 'POST',

@@ -91,7 +91,7 @@ export function RefillChipsModal({
           </div>
         )}
 
-        <div className="store-box pi-border">
+        <div hidden className="store-box pi-border">
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
             <span style={{ color: 'var(--pi-purple)' }}>Pi Wallet Chip Packs</span>
             <span style={{ color: 'var(--gold)' }}>Unlimited Purchases</span>

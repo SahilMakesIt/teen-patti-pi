@@ -249,21 +249,3 @@ export default function App() {
             isFounder && rawChips < FOUNDER_DEFAULT_CHIPS ? FOUNDER_DEFAULT_CHIPS : rawChips;
 
           if (isFounder && rawChips < FOUNDER_DEFAULT_CHIPS) {
-            updateUserProfileFields(stableId, {
-              chipsBalance: FOUNDER_DEFAULT_CHIPS,
-              pioneerName: verifiedUsername,
-              username: verifiedUsername,
-              usernameLocked: true,
-            }).catch(() => {});
-          }
-
-          soundEffects.enabled = doc.soundEnabled !== false;
-          setProfile({
-            playerId: stableId,
-            pioneerName: verifiedUsername,
-            isPiVerified: true,
-            chipsBalance: effectiveChips,
-            handsPlayed: Number(doc.handsPlayed || 0),
-            handsWon: Number(doc.handsWon || 0),
-            soundEnabled: doc.soundEnabled !== false,
-            hideBalance: Boolean

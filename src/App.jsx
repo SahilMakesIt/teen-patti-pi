@@ -50,7 +50,7 @@ import {
   syncRoomAndSeats,
   updateUserProfileFields
 } from './firebase/teenPattiFirebase';
-import { PiProfileModal, RefillChipsModal, RulesModal } from './components/Modals';
+import { RefillChipsModal, RulesModal } from './components/Modals';
 import { TableView } from './components/TableView';
 
 const FOUNDER_PI_USERNAME = 'Bilalrehmanbajwa';
@@ -176,7 +176,6 @@ export default function App() {
   const [turnTimerProgress, setTurnTimerProgress] = useState(1);
 
   const [isRulesOpen, setIsRulesOpen] = useState(false);
-  const [isPiModalOpen, setIsPiModalOpen] = useState(false);
   const [isRefillOpen, setIsRefillOpen] = useState(false);
   const [refillTargetId, setRefillTargetId] = useState(null);
   const [isAdRunning, setIsAdRunning] = useState(false);
@@ -193,7 +192,6 @@ export default function App() {
   const latestRoomRef = useRef(null);
   const latestSeatsRef = useRef([]);
 
-  // Require Pi Browser authentication and lock real Pi username permanently
   useEffect(() => {
     let unsubProfile = null;
     let active = true;
@@ -249,3 +247,114 @@ export default function App() {
             isFounder && rawChips < FOUNDER_DEFAULT_CHIPS ? FOUNDER_DEFAULT_CHIPS : rawChips;
 
           if (isFounder && rawChips < FOUNDER_DEFAULT_CHIPS) {
+            updateUserProfileFields(stableId, {
+              chipsBalance: FOUNDER_DEFAULT_CHIPS,
+              pioneerName: verifiedUsername,
+              username: verifiedUsername,
+              usernameLocked: true,
+            }).catch(() => {});
+          }
+
+          soundEffects.enabled = doc.soundEnabled !== false;
+          setProfile({
+            playerId: stableId,
+            pioneerName: verifiedUsername,
+            isPiVerified: true,
+            chipsBalance: effectiveChips,
+            handsPlayed: Number(doc.handsPlayed || 0),
+            handsWon: Number(doc.handsWon || 0),
+            soundEnabled: doc.soundEnabled !== false,
+            hideBalance: Boolean(doc.hideBalance),
+            adHistory: Array.isArray(doc.adHistory) ? doc.adHistory : [],
+          });
+        },
+        () => {}
+      );
+    })();
+
+    return () => {
+      active = false;
+      if (unsubProfile) unsubProfile();
+    };
+  }, [guest.playerId]);
+
+  useEffect(() => {
+    if (authChecked && profile.isPiVerified && screen === 'LOBBY' && profile.chipsBalance < LOW_CHIPS_THRESHOLD) {
+      const key = `lobby_${profile.chipsBalance}`;
+      if (lowPromptKeyRef.current !== key) {
+        lowPromptKeyRef.current = key;
+        setRefillTargetId(null);
+        setRefillStatusMessage(null);
+        setIsRefillOpen(true);
+      }
+    }
+  }, [authChecked, profile.isPiVerified, screen, profile.chipsBalance]);
+
+  const stopObservingOnlineRoom = () => {
+    if (onlineRoomUnsubRef.current) {
+      onlineRoomUnsubRef.current();
+      onlineRoomUnsubRef.current = null;
+    }
+    if (onlineSeatsUnsubRef.current) {
+      onlineSeatsUnsubRef.current();
+      onlineSeatsUnsubRef.current = null;
+    }
+    latestRoomRef.current = null;
+    latestSeatsRef.current = [];
+  };
+
+  useEffect(() => stopObservingOnlineRoom, []);
+
+  const pushOnlineTableState = async (nextTable, syncCards = false) => {
+    const code = nextTable.roomCode;
+    if (!code) return;
+
+    const roomUpdates = {
+      status: nextTable.phase === TABLE_PHASE.IDLE ? 'waiting' : 'playing',
+      matchmakingState:
+        nextTable.phase === TABLE_PHASE.IDLE && nextTable.isPublicRoom ? 'public_waiting' : 'active',
+      pot: nextTable.pot,
+      currentBlindStake: nextTable.currentBlindStake,
+      turnIndex: nextTable.currentTurnIndex,
+      dealerIndex: nextTable.dealerIndex,
+      roundCount: nextTable.roundCount,
+      handNumber: nextTable.handNumber,
+      bannerMessage: nextTable.bannerMessage,
+      previousActiveSeatId: nextTable.previousActiveSeatId || ''
+    };
+
+    if (nextTable.phase === TABLE_PHASE.SHOWDOWN && nextTable.handResult) {
+      roomUpdates.winnerNames = nextTable.handResult.winnerNames;
+      roomUpdates.winningHandDescription = nextTable.handResult.winningHandDescription;
+    } else if (syncCards) {
+      roomUpdates.winnerNames = [];
+      roomUpdates.winningHandDescription = '';
+    }
+
+    const seatUpdates = {};
+    for (const seat of nextTable.players) {
+      const sMap = {
+        chips: seat.chips,
+        status: seat.status,
+        totalBetInHand: seat.totalBetInHand,
+        lastActionLabel: seat.lastActionLabel || ''
+      };
+      if (syncCards) {
+        sMap.cards = (seat.cards || []).map(encodeCardCode);
+      }
+      seatUpdates[seat.id] = sMap;
+    }
+
+    try {
+      await syncRoomAndSeats(code, roomUpdates, seatUpdates);
+    } catch (err) {
+      setCloudMessage(err?.message || 'Failed to sync move');
+    }
+  };
+
+  const startObservingRoom = (roomCode, fallbackMode) => {
+    stopObservingOnlineRoom();
+    autoStartKeyRef.current = null;
+
+    const handleSnapshotUpdate = () => {
+      const room = latest

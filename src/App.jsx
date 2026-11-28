@@ -860,10 +860,10 @@ export default function App() {
             {cloudMessage && <div className="error-banner">{cloudMessage}</div>}
 
             {showWalletInfoBanner && (
-              <div className="notice-box" style={{ marginBottom: 10 }}>
-                @{visibleUsername} • {profile.isPiVerified ? 'Pi Wallet Connected (Locked)' : piStatusMessage}
-              </div>
-            )}
+  <div className="notice-box" style={{ marginBottom: 10 }}>
+    @{visibleUsername} • {profile.isPiVerified ? 'Pi Wallet Connected (Locked)' : piStatusMessage}
+  </div>
+)}
 
            <div className="hero-banner">
   <div>

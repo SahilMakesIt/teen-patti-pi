@@ -865,15 +865,15 @@ export default function App() {
               </div>
             )}
 
-            <div className="hero-banner">
-              <div>
-                <div className="hero-kicker">CLASSIC 3-CARD TEEN PATTI</div>
-                <div className="hero-sub">Play Chips have zero monetary value. Entertainment only.</div>
-              </div>
-              <span className="profile-chip-btn" style={{ cursor: 'default' }}>
-                @{visibleUsername}
-              </button>
-            </div>
+           <div className="hero-banner">
+  <div>
+    <div className="hero-kicker">CLASSIC 3-CARD TEEN PATTI</div>
+    <div className="hero-sub">Play Chips have zero monetary value. Entertainment only.</div>
+  </div>
+  <span className="profile-chip-btn" style={{ cursor: 'default' }}>
+    @{visibleUsername}
+  </span>
+</div>
 
             <div className="balance-card">
               <div className="balance-left">

@@ -133,7 +133,7 @@ export function RefillChipsModal({
 
         <div className="store-box emerald-border">
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
-            <span style={{ color: 'var(--emerald)' }}>Free Ad Reward (+2,500 Chips)</span>
+            <span style={{ color: 'var(--emerald)' }}>Free Ad Reward (+2,000 Chips)</span>
             <span style={{ color: 'var(--text-secondary)' }}>Unlimited</span>
           </div>
           <button
@@ -158,7 +158,7 @@ export function RefillChipsModal({
               type="text"
               className="code-input"
               style={{ letterSpacing: 'normal', width: '100%' }}
-              placeholder="Friend's Pi Username or Player ID"
+              placeholder="Friend's Pi Username"
               value={giftRecipient}
               disabled={busy}
               onChange={(e) => setGiftRecipient(e.target.value)}

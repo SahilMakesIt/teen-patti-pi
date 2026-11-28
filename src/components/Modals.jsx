@@ -8,7 +8,7 @@ const PI_PACKS = [
   { quantity: 5, label: '5x', chips: 50000, piLabel: '1.25 Pi' },
 ];
 
-const GIFT_PRESETS = [1000, 5000, 25000, 100000];
+const GIFT_PRESETS = [1000, 5000, 25000, 50000];
 
 export function RefillChipsModal({
   playerName,
@@ -40,6 +40,7 @@ export function RefillChipsModal({
     !busy &&
     giftRecipient.trim().length >= 2 &&
     parsedGiftAmount >= 100 &&
+    parsedGiftAmount <= 50000 &&
     parsedGiftAmount <= currentChips;
 
   const handleGiftSubmit = (e) => {
@@ -151,7 +152,7 @@ export function RefillChipsModal({
           <form onSubmit={handleGiftSubmit} className="store-box" style={{ border: '1px solid rgba(242, 201, 76, 0.35)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, fontWeight: 700 }}>
               <span style={{ color: 'var(--gold)' }}>Send Play Chips to a Friend</span>
-              <span style={{ color: 'var(--text-secondary)' }}>Min 100 Chips</span>
+              <span style={{ color: 'var(--text-secondary)' }}>Min 100 • Max 50K / 24h</span>
             </div>
 
             <input
@@ -183,7 +184,7 @@ export function RefillChipsModal({
               <input
                 type="number"
                 min={100}
-                max={currentChips}
+                max={Math.min(50000, currentChips)}
                 className="code-input"
                 style={{ letterSpacing: 'normal', flex: 1 }}
                 placeholder="Amount"

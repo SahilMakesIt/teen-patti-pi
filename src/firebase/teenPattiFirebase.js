@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/analytics';
 import {
@@ -32,8 +33,17 @@ const firebaseConfig = {
 };
 
 export const FIRESTORE_DATABASE_ID = 'ai-studio-android-teenpatt-40f016a0-2258-4001-a4b3-a545bea9020f';
+const RECAPTCHA_ENTERPRISE_SITE_KEY = '6LdenDYuAAAAAFQIc4tfpfLCYfL1BjGjroscht0X';
 
 const app = initializeApp(firebaseConfig);
+
+if (typeof window !== 'undefined') {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(RECAPTCHA_ENTERPRISE_SITE_KEY),
+    isTokenAutoRefreshEnabled: true
+  });
+}
+
 const auth = getAuth(app);
 const db = getFirestore(app, FIRESTORE_DATABASE_ID);
 

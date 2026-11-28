@@ -870,11 +870,7 @@ export default function App() {
                 <div className="hero-kicker">CLASSIC 3-CARD TEEN PATTI</div>
                 <div className="hero-sub">Play Chips have zero monetary value. Entertainment only.</div>
               </div>
-              <button
-                type="button"
-                className="profile-chip-btn"
-                onClick={() => setShowWalletInfoBanner((prev) => !prev)}
-              >
+              <span className="profile-chip-btn" style={{ cursor: 'default' }}>
                 @{visibleUsername}
               </button>
             </div>

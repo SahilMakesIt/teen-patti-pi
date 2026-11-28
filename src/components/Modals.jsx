@@ -32,7 +32,7 @@ export function RefillChipsModal({
 
   const adButtonLabel = isAdPreviewRunning
     ? 'Loading Ad...'
-    : 'Watch Ad Video (+2,500 Free Chips)';
+    : 'Watch Video (+2,000 Free Chips)';
   
   const parsedGiftAmount = Math.max(0, Math.floor(Number(giftAmount) || 0));
   const canSendGift =
@@ -248,10 +248,8 @@ export function PiProfileModal({
   piStatusMessage,
   isConnecting,
   onConnectWithPi,
-  onSaveNickname,
   onDismiss,
 }) {
-  const [nickname, setNickname] = useState(currentName || '');
   return (
     <div className="modal-backdrop" onClick={onDismiss}>
       <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -266,36 +264,22 @@ export function PiProfileModal({
           {piStatusMessage}
         </div>
 
-        <button type="button" className="dock-btn pi" disabled={isConnecting} onClick={onConnectWithPi}>
-          <Wallet size={17} />
-          {isConnecting ? 'Connecting Pi Wallet...' : 'Connect Pi Wallet'}
-        </button>
-
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>
-            Display Nickname
+            Permanent Pi Username (First 5 Characters Shown)
           </label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <input
-              type="text"
-              className="code-input"
-              style={{ letterSpacing: 'normal' }}
-              value={nickname}
-              maxLength={16}
-              onChange={(e) => setNickname(e.target.value)}
-            />
-            <button
-              type="button"
-              className="join-btn"
-              onClick={() => {
-                onSaveNickname(nickname);
-                onDismiss();
-              }}
-            >
-              Save
-            </button>
+          <div
+            className="code-input"
+            style={{ letterSpacing: 'normal', opacity: 0.85, userSelect: 'none' }}
+          >
+            @{currentName || 'PiUser'}
           </div>
         </div>
+
+        <button type="button" className="dock-btn pi" disabled={isConnecting} onClick={onConnectWithPi}>
+          <Wallet size={17} />
+          {isConnecting ? 'Verifying Pi Account...' : 'Refresh Pi Verification'}
+        </button>
       </div>
     </div>
   );
